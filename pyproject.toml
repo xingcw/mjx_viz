@@ -1,0 +1,36 @@
+[project]
+name = "mjx-viz"
+version = "0.1.0"
+description = "Reusable rollout + brax HTML visualization + dashboard for MJX/brax policies"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "jax>=0.4.30",
+    "mujoco>=3.2.0",
+    "brax>=0.11.0",
+    "numpy>=1.26.0",
+]
+
+[project.optional-dependencies]
+dashboard = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+]
+tpu = ["jax[tpu]>=0.4.30"]
+gpu = ["jax[cuda12]>=0.4.30"]
+dev = ["pytest>=8.0", "ruff>=0.4.0"]
+
+[project.scripts]
+mjx-viz-dashboard = "mjx_viz.dashboard.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mjx_viz"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"src/mjx_viz/dashboard/static" = "mjx_viz/dashboard/static"
+
+[tool.ruff]
+line-length = 100
