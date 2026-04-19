@@ -36,12 +36,20 @@ def create_app(videos_dir: str, title: str = "mjx_viz Dashboard") -> FastAPI:
         for name, info in sorted(runs.items(), reverse=True):
             meta = info["meta"] or {}
             steps_sorted = sorted(info["steps"].keys())
+            # Infer layout: single-shot runs have exactly step 0 and a viz/ dir
+            is_viz_layout = (
+                name != "__default__"
+                and (Path(videos_dir) / name / "viz").is_dir()
+                and steps_sorted == [0]
+            )
             result.append({
                 "name": name,
                 "created": meta.get("created", ""),
                 "num_steps": len(steps_sorted),
                 "steps": steps_sorted,
                 "latest_step": steps_sorted[-1] if steps_sorted else None,
+                "layout": "viz" if is_viz_layout else "step",
+                "meta": meta,
             })
         return result
 
@@ -72,7 +80,7 @@ def create_app(videos_dir: str, title: str = "mjx_viz Dashboard") -> FastAPI:
         return FileResponse(
             str(full_path),
             media_type="text/html",
-            headers={"Cache-Control": "public, max-age=3600"},
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
         )
 
     @app.get("/api/events")

@@ -67,6 +67,10 @@
              gap: 8px; flex-wrap: wrap; min-height: 44px; }
   .toolbar .breadcrumb { font-size: 12px; color: var(--text-dim); }
   .toolbar .breadcrumb span { color: var(--text); }
+  .toolbar .meta-chip { font-size: 11px; color: var(--text-dim);
+                        background: var(--bg); border: 1px solid var(--border);
+                        padding: 2px 8px; border-radius: 4px; font-family: monospace; }
+  .toolbar .meta-chip b { color: var(--text); font-weight: 600; }
   .episode-tabs { display: flex; gap: 4px; margin-left: 16px; flex-wrap: wrap; }
   .episode-tab { padding: 4px 10px; font-size: 11px; border-radius: 4px; cursor: pointer;
                  background: var(--bg); border: 1px solid var(--border); color: var(--text-dim);
@@ -89,7 +93,7 @@
 <body>
 <div class="app">
   <div class="header">
-    <h1>GO2 TRAINING DASHBOARD</h1>
+    <h1>MJX_VIZ DASHBOARD</h1>
     <div class="status">
       <div class="status-dot" id="statusDot"></div>
       <span id="statusText">Connecting...</span>
@@ -176,20 +180,26 @@
     for (const run of runs) {
       const isOpen = openRuns[run.name];
       const isActive = selectedRun === run.name;
+      const isViz = run.layout === 'viz';
       html += `<div class="run-group">`;
-      html += `<div class="run-header ${isActive ? 'active' : ''}" data-run="${run.name}">`;
-      html += `<span class="arrow ${isOpen ? 'open' : ''}">&#9654;</span>`;
+      html += `<div class="run-header ${isActive ? 'active' : ''}" data-run="${run.name}" data-viz="${isViz ? '1' : '0'}">`;
+      html += `<span class="arrow ${(isOpen || isViz) ? 'open' : ''}" style="${isViz ? 'visibility:hidden' : ''}">&#9654;</span>`;
       html += `<span title="${run.name}">${fmtRunName(run.name)}</span>`;
-      html += `<span class="count">${run.num_steps} steps</span>`;
+      if (!isViz) {
+        html += `<span class="count">${run.num_steps} steps</span>`;
+      }
       html += `</div>`;
-      html += `<div class="step-list ${isOpen ? 'open' : ''}">`;
-      for (const step of run.steps) {
-        const active = selectedRun === run.name && selectedStep === step;
-        html += `<div class="step-item ${active ? 'active' : ''}" data-run="${run.name}" data-step="${step}">`;
-        html += `<span class="step-label">step ${fmtStep(step)}</span>`;
+      if (!isViz) {
+        html += `<div class="step-list ${isOpen ? 'open' : ''}">`;
+        for (const step of run.steps) {
+          const active = selectedRun === run.name && selectedStep === step;
+          html += `<div class="step-item ${active ? 'active' : ''}" data-run="${run.name}" data-step="${step}">`;
+          html += `<span class="step-label">step ${fmtStep(step)}</span>`;
+          html += `</div>`;
+        }
         html += `</div>`;
       }
-      html += `</div></div>`;
+      html += `</div>`;
     }
     sidebar.innerHTML = html;
 
@@ -197,13 +207,38 @@
     sidebar.querySelectorAll('.run-header').forEach(el => {
       el.addEventListener('click', () => {
         const name = el.dataset.run;
-        openRuns[name] = !openRuns[name];
-        renderSidebar();
+        if (el.dataset.viz === '1') {
+          // viz-layout runs have a synthetic step 0 — select directly
+          selectStep(name, 0);
+        } else {
+          openRuns[name] = !openRuns[name];
+          renderSidebar();
+        }
       });
     });
     sidebar.querySelectorAll('.step-item').forEach(el => {
       el.addEventListener('click', () => selectStep(el.dataset.run, parseInt(el.dataset.step)));
     });
+  }
+
+  function findRun(name) {
+    return runs.find(r => r.name === name);
+  }
+
+  function renderMetaChips(run) {
+    if (!run || !run.meta) return '';
+    const chips = [];
+    const scales = run.meta.morphology_scales;
+    if (scales && typeof scales === 'object') {
+      for (const [k, v] of Object.entries(scales)) {
+        const val = typeof v === 'number' ? v.toFixed(3) : String(v);
+        chips.push(`<span class="meta-chip"><b>${k}</b> ${val}</span>`);
+      }
+    }
+    if (run.meta.env_name) {
+      chips.unshift(`<span class="meta-chip"><b>env</b> ${run.meta.env_name}</span>`);
+    }
+    return chips.join(' ');
   }
 
   // ---- Select step -> load episodes ----
@@ -223,7 +258,13 @@
   }
 
   function renderEpisodes(episodes, runName, step) {
-    breadcrumb.innerHTML = `<span>${fmtRunName(runName)}</span> / <span>step ${fmtStep(step)}</span>`;
+    const run = findRun(runName);
+    const isViz = run && run.layout === 'viz';
+    const crumb = isViz
+      ? `<span>${fmtRunName(runName)}</span>`
+      : `<span>${fmtRunName(runName)}</span> / <span>step ${fmtStep(step)}</span>`;
+    const chips = renderMetaChips(run);
+    breadcrumb.innerHTML = chips ? `${crumb} &nbsp; ${chips}` : crumb;
     episodeTabs.innerHTML = '';
     for (const ep of episodes) {
       const info = parseEpisodeName(ep);
@@ -245,9 +286,12 @@
     });
 
     // Build file path
+    const run = findRun(runName);
     let filePath;
     if (runName === '__default__') {
       filePath = `step_${step}/${filename}`;
+    } else if (run && run.layout === 'viz') {
+      filePath = `${runName}/viz/${filename}`;
     } else {
       filePath = `${runName}/step_${step}/${filename}`;
     }

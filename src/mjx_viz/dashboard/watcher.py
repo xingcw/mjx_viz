@@ -12,9 +12,12 @@ from typing import AsyncIterator
 def scan_runs(videos_dir: str) -> dict:
     """Walk the videos directory and return a structured index of all runs.
 
-    Supports two layouts:
+    Supports three layouts:
       - Named runs:  videos/{run_name}/step_{N}/*.html
-      - Legacy flat:  videos/step_{N}/*.html  (grouped under "__default__")
+      - Legacy flat: videos/step_{N}/*.html  (grouped under "__default__")
+      - Single-shot: videos/{run_name}/viz/*.html  (no step subdir; shown as step 0)
+
+    Run metadata is loaded from `run_meta.json` or (fallback) `morphology_metadata.json`.
 
     Returns:
         {run_name: {"meta": dict | None, "steps": {step_int: [filenames]}}}
@@ -38,8 +41,19 @@ def scan_runs(videos_dir: str) -> dict:
             run["steps"][step_num] = _list_html(entry)
             continue
 
-        # Named run layout: videos/{run_name}/step_N/
+        # Named run layout
         meta = _load_meta(entry)
+
+        # Single-shot layout: videos/{run_name}/viz/*.html
+        viz_dir = entry / "viz"
+        if viz_dir.is_dir():
+            files = _list_html(viz_dir)
+            if files:
+                run = runs.setdefault(entry.name, {"meta": meta, "steps": {}})
+                run["steps"][0] = files
+                continue
+
+        # Stepped layout: videos/{run_name}/step_N/
         run = runs.setdefault(entry.name, {"meta": meta, "steps": {}})
         for step_dir in sorted(entry.iterdir()):
             if not step_dir.is_dir() or not step_dir.name.startswith("step_"):
@@ -65,13 +79,14 @@ def _list_html(directory: Path) -> list[str]:
 
 
 def _load_meta(run_dir: Path) -> dict | None:
-    """Load run_meta.json from a run directory, or None."""
-    meta_path = run_dir / "run_meta.json"
-    if meta_path.is_file():
-        try:
-            return json.loads(meta_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
+    """Load run_meta.json (or fallback morphology_metadata.json) from a run dir."""
+    for fname in ("run_meta.json", "morphology_metadata.json"):
+        meta_path = run_dir / fname
+        if meta_path.is_file():
+            try:
+                return json.loads(meta_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
     return None
 
 
@@ -118,6 +133,11 @@ def _parse_file_event(videos_dir: str, filepath: str) -> dict | None:
             if step is not None:
                 return {"type": "new_file", "run": parts[0],
                         "step": step, "file": parts[2]}
+
+        # Single-shot: run_name/viz/filename.html
+        if len(parts) == 3 and parts[1] == "viz":
+            return {"type": "new_file", "run": parts[0],
+                    "step": 0, "file": parts[2]}
 
         # Legacy flat: step_N/filename.html
         if len(parts) == 2 and parts[0].startswith("step_"):
