@@ -9,6 +9,8 @@ Run with:
 from __future__ import annotations
 
 import argparse
+import json
+import mimetypes
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -18,6 +20,10 @@ from fastapi.staticfiles import StaticFiles
 from mjx_viz.dashboard.watcher import scan_runs, watch_sse
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# Extensions we expose through /api/files with auto-detected mime types.
+SUPPORTED_EXT = {".html", ".png", ".jpg", ".jpeg", ".svg", ".json"}
+PLOT_EXT = {".png", ".jpg", ".jpeg", ".svg"}
 
 
 def create_app(videos_dir: str, title: str = "mjx_viz Dashboard") -> FastAPI:
@@ -64,11 +70,12 @@ def create_app(videos_dir: str, title: str = "mjx_viz Dashboard") -> FastAPI:
 
     @app.get("/api/files/{file_path:path}")
     async def serve_file(file_path: str):
-        """Serve a brax HTML file from the videos directory.
+        """Serve a file from the videos directory (HTML, JSON, or image).
 
         Paths are relative to videos_dir, e.g.:
           /api/files/run-20260411-041700/step_0/forward_slow_ep0.html
-          /api/files/step_0/forward_slow_ep0.html  (legacy flat layout)
+          /api/files/morph_000_rl/viz/rollout_summary.json
+          /api/files/iterative_prompting.png
         """
         full_path = Path(videos_dir) / file_path
         try:
@@ -77,11 +84,53 @@ def create_app(videos_dir: str, title: str = "mjx_viz Dashboard") -> FastAPI:
             raise HTTPException(403, "Access denied")
         if not full_path.is_file():
             raise HTTPException(404, "File not found")
+        ext = full_path.suffix.lower()
+        if ext not in SUPPORTED_EXT:
+            raise HTTPException(415, f"Unsupported extension {ext}")
+        media_type = mimetypes.guess_type(str(full_path))[0] or "application/octet-stream"
         return FileResponse(
             str(full_path),
-            media_type="text/html",
+            media_type=media_type,
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
         )
+
+    @app.get("/api/plots")
+    async def list_plots():
+        """Return top-level image files in videos_dir (e.g. iterative_prompting.png)."""
+        root = Path(videos_dir)
+        if not root.is_dir():
+            return []
+        return sorted(
+            f.name for f in root.iterdir()
+            if f.is_file() and f.suffix.lower() in PLOT_EXT
+        )
+
+    @app.get("/api/runs/{run_name}/summary")
+    async def run_summary(run_name: str):
+        """Return parsed morphology_metadata.json and rollout_summary.json for a run."""
+        run_dir = Path(videos_dir) / run_name
+        try:
+            run_dir.resolve().relative_to(Path(videos_dir).resolve())
+        except ValueError:
+            raise HTTPException(403, "Access denied")
+        if not run_dir.is_dir():
+            raise HTTPException(404, "Run not found")
+        out = {}
+        for fname in ("morphology_metadata.json", "run_meta.json"):
+            p = run_dir / fname
+            if p.is_file():
+                try:
+                    out["metadata"] = json.loads(p.read_text())
+                    break
+                except json.JSONDecodeError:
+                    pass
+        summary_path = run_dir / "viz" / "rollout_summary.json"
+        if summary_path.is_file():
+            try:
+                out["rollout_summary"] = json.loads(summary_path.read_text())
+            except json.JSONDecodeError:
+                pass
+        return out
 
     @app.get("/api/events")
     async def sse_events():
