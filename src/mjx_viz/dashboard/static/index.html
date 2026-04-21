@@ -79,9 +79,13 @@
   .episode-tab.active { background: var(--accent-dim); border-color: var(--accent);
                         color: #fff; }
 
-  .viewer { flex: 1; position: relative; background: var(--bg); }
+  .viewer { flex: 1; position: relative; background: var(--bg); overflow: auto; }
   .viewer iframe { width: 100%; height: 100%; border: none; }
-  .viewer img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .viewer img { max-width: calc(100% - 32px); max-height: calc(100% - 32px);
+                width: auto; height: auto; display: block;
+                position: absolute; top: 50%; left: 50%;
+                transform: translate(-50%, -50%);
+                box-shadow: 0 4px 20px rgba(0,0,0,0.35); }
   .viewer .empty { position: absolute; inset: 0; display: flex; align-items: center;
                    justify-content: center; color: var(--text-dim); font-size: 14px;
                    flex-direction: column; gap: 8px; }
