@@ -98,10 +98,18 @@
   .sidebar-section-title { padding: 10px 12px 4px; font-size: 11px;
                            text-transform: uppercase; letter-spacing: 0.8px;
                            color: var(--text-dim); font-weight: 700; }
+  .sidebar-subgroup { padding: 4px 12px 2px 18px; font-size: 10px;
+                      text-transform: uppercase; letter-spacing: 0.6px;
+                      color: var(--text-dim); opacity: 0.7;
+                      font-family: monospace; }
   .plot-item { padding: 6px 12px 6px 30px; font-size: 12px; cursor: pointer;
                color: var(--text-dim); transition: all 0.15s; font-family: monospace; }
   .plot-item:hover { background: var(--surface-hover); color: var(--text); }
   .plot-item.active { color: var(--accent); background: rgba(108, 140, 255, 0.08); }
+  .summary-item { padding: 6px 12px 6px 30px; font-size: 12px; cursor: pointer;
+                  color: var(--text-dim); transition: all 0.15s; font-family: monospace; }
+  .summary-item:hover { background: var(--surface-hover); color: var(--text); }
+  .summary-item.active { color: var(--accent); background: rgba(108, 140, 255, 0.08); }
 
   /* Toolbar "Summary" button + JSON panel */
   .toolbar button.summary-btn { margin-left: auto; font-size: 11px;
@@ -169,6 +177,8 @@
   let selectedStep = null;
   let selectedFile = null;
   let selectedPlot = null;
+  let selectedSummary = null;
+  let analysisSummaryAvailable = false;
   let summaryOpen = false;
 
   const sidebar = document.getElementById('sidebar');
@@ -185,13 +195,21 @@
 
   // ---- API helpers ----
   async function fetchRuns() {
-    const [runsResp, plotsResp] = await Promise.all([
+    const [runsResp, plotsResp, summaryResp] = await Promise.all([
       fetch('/api/runs'),
       fetch('/api/plots'),
+      fetch('/api/analysis-summary'),
     ]);
     runs = await runsResp.json();
     plots = plotsResp.ok ? await plotsResp.json() : [];
+    analysisSummaryAvailable = summaryResp.ok;
     renderSidebar();
+  }
+
+  async function fetchAnalysisSummary() {
+    const resp = await fetch('/api/analysis-summary');
+    if (!resp.ok) return null;
+    return resp.json();
   }
 
   async function fetchEpisodes(runName, step) {
@@ -233,10 +251,23 @@
     let html = '';
     if (plots.length > 0) {
       html += `<div class="sidebar-section-title">Plots</div>`;
+      let lastGroup = null;
       for (const plot of plots) {
-        const active = selectedPlot === plot;
-        html += `<div class="plot-item ${active ? 'active' : ''}" data-plot="${plot}">`;
-        html += `<span>${plot}</span></div>`;
+        if (plot.group && plot.group !== lastGroup) {
+          // Subgroup labels: top-level plots are unlabeled, "analysis/" gets a heading.
+          if (plot.group !== 'top') {
+            html += `<div class="sidebar-subgroup">${plot.group}/</div>`;
+          }
+          lastGroup = plot.group;
+        }
+        const active = selectedPlot === plot.path;
+        html += `<div class="plot-item ${active ? 'active' : ''}" data-plot="${plot.path}" data-name="${plot.name}">`;
+        html += `<span>${plot.name}</span></div>`;
+      }
+      if (analysisSummaryAvailable) {
+        const active = selectedSummary === 'analysis';
+        html += `<div class="summary-item ${active ? 'active' : ''}" data-summary="analysis">`;
+        html += `<span>summary.json</span></div>`;
       }
     }
     if (runs.length > 0) {
@@ -285,26 +316,72 @@
       el.addEventListener('click', () => selectStep(el.dataset.run, parseInt(el.dataset.step)));
     });
     sidebar.querySelectorAll('.plot-item').forEach(el => {
-      el.addEventListener('click', () => selectPlot(el.dataset.plot));
+      el.addEventListener('click', () => selectPlot(el.dataset.plot, el.dataset.name));
+    });
+    sidebar.querySelectorAll('.summary-item').forEach(el => {
+      el.addEventListener('click', () => selectAnalysisSummary());
     });
   }
 
-  function selectPlot(name) {
-    selectedPlot = name;
+  function selectPlot(path, name) {
+    selectedPlot = path;
+    selectedSummary = null;
     selectedRun = null;
     selectedStep = null;
     selectedFile = null;
     renderSidebar();
-    // Hide iframe, show image; hide summary button (plots aren't runs)
+    restoreViewerLayout();
     vizFrame.style.display = 'none';
     emptyState.style.display = 'none';
     summaryBtn.style.display = 'none';
     summaryPanel.classList.remove('open');
     summaryOpen = false;
-    breadcrumb.innerHTML = `<span>Plots</span> / <span>${name}</span>`;
+    breadcrumb.innerHTML = `<span>Plots</span> / <span>${name || path}</span>`;
     episodeTabs.innerHTML = '';
     vizImage.style.display = 'block';
-    vizImage.src = '/api/files/' + encodeURI(name);
+    vizImage.src = '/api/files/' + encodeURI(path);
+  }
+
+  const viewer = document.getElementById('viewer');
+
+  function restoreViewerLayout() {
+    viewer.style.display = '';
+    summaryPanel.style.maxHeight = '';
+    summaryPanel.style.flex = '';
+  }
+
+  async function selectAnalysisSummary() {
+    selectedSummary = 'analysis';
+    selectedPlot = null;
+    selectedRun = null;
+    selectedStep = null;
+    selectedFile = null;
+    renderSidebar();
+    summaryBtn.style.display = 'none';
+    breadcrumb.innerHTML = `<span>Analysis</span> / <span>summary.json</span>`;
+    episodeTabs.innerHTML = '';
+    // Hide the video viewer entirely; let the summary panel fill the main area.
+    viewer.style.display = 'none';
+    summaryPanel.style.maxHeight = 'none';
+    summaryPanel.style.flex = '1';
+    summaryPanel.classList.add('open');
+    summaryPanel.innerHTML = '<div class="empty-text">Loading analysis summary...</div>';
+    summaryOpen = true;
+    const data = await fetchAnalysisSummary();
+    if (!data) {
+      summaryPanel.innerHTML = '<div class="empty-text">'
+        + 'No analysis/summary.json found. Run scripts/analyze_zero_shot.py first.'
+        + '</div>';
+      return;
+    }
+    renderAnalysisSummaryPanel(data);
+  }
+
+  function renderAnalysisSummaryPanel(data) {
+    const headline = data.headline ? `<pre style="font-size:13px;font-weight:600;color:var(--accent);margin-bottom:14px;">${escapeHtml(data.headline)}</pre>` : '';
+    summaryPanel.innerHTML = headline
+      + `<h3>summary.json</h3>`
+      + `<pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
   }
 
   function findRun(name) {
@@ -382,6 +459,9 @@
       filePath = `${runName}/step_${step}/${filename}`;
     }
 
+    selectedSummary = null;
+    selectedPlot = null;
+    restoreViewerLayout();
     emptyState.style.display = 'none';
     vizImage.style.display = 'none';
     loading.classList.add('show');

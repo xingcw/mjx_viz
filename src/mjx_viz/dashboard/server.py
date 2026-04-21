@@ -96,14 +96,40 @@ def create_app(videos_dir: str, title: str = "mjx_viz Dashboard") -> FastAPI:
 
     @app.get("/api/plots")
     async def list_plots():
-        """Return top-level image files in videos_dir (e.g. iterative_prompting.png)."""
+        """Return image files at top-level + analysis/ subdir of videos_dir.
+
+        Each entry: {name, path, group} where `path` is relative to videos_dir
+        (suitable for /api/files/<path>) and `group` is 'top' or 'analysis'
+        for sidebar grouping.
+        """
         root = Path(videos_dir)
         if not root.is_dir():
             return []
-        return sorted(
-            f.name for f in root.iterdir()
-            if f.is_file() and f.suffix.lower() in PLOT_EXT
-        )
+        out = []
+        for f in sorted(root.iterdir()):
+            if f.is_file() and f.suffix.lower() in PLOT_EXT:
+                out.append({"name": f.name, "path": f.name, "group": "top"})
+        analysis_dir = root / "analysis"
+        if analysis_dir.is_dir():
+            for f in sorted(analysis_dir.iterdir()):
+                if f.is_file() and f.suffix.lower() in PLOT_EXT:
+                    out.append({
+                        "name": f.name,
+                        "path": f"analysis/{f.name}",
+                        "group": "analysis",
+                    })
+        return out
+
+    @app.get("/api/analysis-summary")
+    async def analysis_summary():
+        """Return parsed analysis/summary.json (from scripts/analyze_zero_shot.py)."""
+        p = Path(videos_dir) / "analysis" / "summary.json"
+        if not p.is_file():
+            raise HTTPException(404, "No analysis summary found")
+        try:
+            return json.loads(p.read_text())
+        except json.JSONDecodeError as e:
+            raise HTTPException(500, f"Bad summary.json: {e}")
 
     @app.get("/api/runs/{run_name}/summary")
     async def run_summary(run_name: str):
