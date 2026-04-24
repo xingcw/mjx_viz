@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>mjx_viz Checkpoints Dashboard</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  :root {
+    --sidebar-w: 360px;
+    --bg: #0f1117;
+    --surface: #181b24;
+    --surface-hover: #1f2330;
+    --border: #2a2e3a;
+    --text: #e0e0e6;
+    --text-dim: #8b8fa3;
+    --accent: #6c8cff;
+    --accent-dim: #3d5299;
+    --green: #4caf82;
+    --yellow: #e6b94a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: var(--bg); color: var(--text); height: 100vh; overflow: hidden; }
+
+  .app { display: grid; grid-template-columns: var(--sidebar-w) 1fr;
+         grid-template-rows: 48px 1fr; height: 100vh; }
+  .header { grid-column: 1 / -1; display: flex; align-items: center;
+            padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--border);
+            gap: 12px; }
+  .header h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.5px; }
+  .header .nav { margin-left: 12px; display: flex; gap: 8px; }
+  .header .nav a { color: var(--text-dim); text-decoration: none; font-size: 12px;
+                   padding: 4px 10px; border: 1px solid var(--border); border-radius: 4px; }
+  .header .nav a.active { color: var(--accent); border-color: var(--accent-dim); }
+  .header .nav a:hover { color: var(--text); }
+  .header .info { margin-left: auto; font-size: 12px; color: var(--text-dim);
+                  font-family: monospace; }
+
+  .sidebar { background: var(--surface); border-right: 1px solid var(--border);
+             overflow: hidden; display: flex; flex-direction: column; }
+  .controls { padding: 10px 12px; border-bottom: 1px solid var(--border);
+              display: flex; flex-direction: column; gap: 8px; }
+  .controls input, .controls select { background: var(--bg); color: var(--text);
+              border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px;
+              font-size: 12px; font-family: inherit; }
+  .controls input:focus, .controls select:focus { outline: none; border-color: var(--accent); }
+  .controls .row { display: flex; gap: 6px; }
+  .controls .row > * { flex: 1; }
+  .controls label { font-size: 11px; color: var(--text-dim); display: flex;
+                    align-items: center; gap: 6px; cursor: pointer; }
+  .controls .actions { display: flex; gap: 6px; }
+  .controls button { background: var(--bg); color: var(--text); border: 1px solid var(--border);
+                     border-radius: 4px; padding: 5px 10px; font-size: 11px; cursor: pointer;
+                     font-family: inherit; }
+  .controls button:hover { border-color: var(--accent-dim); color: var(--accent); }
+
+  .run-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .run-list::-webkit-scrollbar { width: 4px; }
+  .run-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .run-item { display: grid; grid-template-columns: 18px 1fr auto; align-items: center;
+              padding: 6px 12px; font-size: 12px; cursor: pointer;
+              transition: background 0.1s; gap: 8px; border-left: 3px solid transparent; }
+  .run-item:hover { background: var(--surface-hover); }
+  .run-item.checked { background: rgba(108, 140, 255, 0.08); }
+  .run-item input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+  .run-item .rid { font-family: monospace; color: var(--text); white-space: nowrap;
+                   overflow: hidden; text-overflow: ellipsis; }
+  .run-item .reward { font-family: monospace; color: var(--text-dim); font-size: 11px; }
+  .run-item .reward.good { color: var(--green); }
+  .run-item .reward.bad { color: var(--yellow); }
+  .run-item.no-eval .rid { color: var(--text-dim); }
+
+  .footer { padding: 8px 12px; border-top: 1px solid var(--border);
+            font-size: 11px; color: var(--text-dim); }
+
+  .main { display: flex; flex-direction: column; overflow: hidden; }
+  .toolbar { display: flex; align-items: center; padding: 8px 16px;
+             background: var(--surface); border-bottom: 1px solid var(--border);
+             gap: 12px; min-height: 44px; font-size: 12px; color: var(--text-dim); }
+  .toolbar b { color: var(--text); font-weight: 600; }
+  .toolbar .x-axis-toggle { margin-left: auto; display: flex; gap: 4px; }
+  .toolbar .x-axis-toggle button { background: var(--bg); color: var(--text-dim);
+              border: 1px solid var(--border); padding: 3px 10px; font-size: 11px;
+              border-radius: 3px; cursor: pointer; font-family: inherit; }
+  .toolbar .x-axis-toggle button.active { color: var(--accent); border-color: var(--accent-dim); }
+
+  .chart-wrap { flex: 1; padding: 8px 12px; overflow: hidden; }
+  #chart { width: 100%; height: 100%; }
+  .empty { display: flex; align-items: center; justify-content: center;
+           height: 100%; color: var(--text-dim); font-size: 13px; flex-direction: column; gap: 6px; }
+  .empty .hint { font-size: 12px; }
+
+  .meta-panel { border-top: 1px solid var(--border); background: var(--surface);
+                max-height: 220px; overflow-y: auto; padding: 10px 16px; font-size: 12px; }
+  .meta-panel::-webkit-scrollbar { width: 4px; }
+  .meta-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .meta-panel h3 { font-size: 11px; font-weight: 600; color: var(--text-dim);
+                    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .meta-panel .empty-meta { color: var(--text-dim); font-style: italic; }
+  .meta-panel table { width: 100%; border-collapse: collapse; font-family: monospace;
+                      font-size: 11px; }
+  .meta-panel th { text-align: right; padding: 4px 8px; color: var(--text-dim);
+                   border-bottom: 1px solid var(--border); font-weight: 600; }
+  .meta-panel th:first-child, .meta-panel td:first-child { text-align: left; }
+  .meta-panel td { padding: 3px 8px; text-align: right; }
+  .meta-panel .swatch { display: inline-block; width: 10px; height: 10px;
+                        border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <h1>MJX_VIZ CHECKPOINTS</h1>
+    <div class="nav" id="nav"></div>
+    <div class="info" id="datasetInfo">Loading dataset...</div>
+  </div>
+
+  <div class="sidebar">
+    <div class="controls">
+      <input type="text" id="search" placeholder="Filter runs..." />
+      <div class="row">
+        <select id="sortBy">
+          <option value="run_suffix">Sort: name / suffix</option>
+          <option value="final_reward_desc">Sort: final reward (high -> low)</option>
+          <option value="final_reward_asc">Sort: final reward (low -> high)</option>
+        </select>
+      </div>
+      <label><input type="checkbox" id="evalOnly" checked> with eval curve only</label>
+      <div class="actions">
+        <button id="toggleAllBtn">Toggle all (filtered)</button>
+        <button id="clearBtn">Clear</button>
+        <button id="top10Btn">Top 10</button>
+      </div>
+    </div>
+    <div class="run-list" id="runList">
+      <div style="padding:12px; color: var(--text-dim); font-size: 12px;">Loading runs...</div>
+    </div>
+    <div class="footer" id="runFooter"></div>
+  </div>
+
+  <div class="main">
+    <div class="toolbar">
+      <span>Selected: <b id="selCount">0</b></span>
+      <span id="xAxisLabel">x-axis: checkpoint index</span>
+      <div class="x-axis-toggle">
+        <button data-x="index" class="active">index</button>
+        <button data-x="fraction">fraction</button>
+        <button data-x="step">approx step</button>
+      </div>
+    </div>
+    <div class="chart-wrap" id="chartWrap">
+      <div class="empty" id="chartEmpty">
+        <div>No runs selected</div>
+        <div class="hint">Check runs in the sidebar to overlay reward curves</div>
+      </div>
+      <div id="chart" style="display:none"></div>
+    </div>
+    <div class="meta-panel" id="metaPanel">
+      <h3>Run metadata</h3>
+      <div class="empty-meta">Select runs to see per-run metadata.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const PALETTE = [
+    "#6c8cff", "#4caf82", "#e6b94a", "#ff6b6b", "#c77dff",
+    "#00bcd4", "#ff9f1c", "#f06292", "#81c784", "#9fa8da",
+  ];
+
+  const state = {
+    runs: [],              // full list from /api/ckpts/runs
+    filtered: [],          // after search/filter
+    selected: new Map(),   // name -> {rewards, final_reward, num_ckpts, morphology_metadata, source}
+    sortBy: "run_suffix",
+    search: "",
+    evalOnly: true,
+    xMode: "index",        // index | fraction | step
+    numTimesteps: null,
+  };
+
+  const els = {
+    search: document.getElementById("search"),
+    sortBy: document.getElementById("sortBy"),
+    evalOnly: document.getElementById("evalOnly"),
+    runList: document.getElementById("runList"),
+    runFooter: document.getElementById("runFooter"),
+    selCount: document.getElementById("selCount"),
+    chart: document.getElementById("chart"),
+    chartEmpty: document.getElementById("chartEmpty"),
+    metaPanel: document.getElementById("metaPanel"),
+    xAxisLabel: document.getElementById("xAxisLabel"),
+    datasetInfo: document.getElementById("datasetInfo"),
+    nav: document.getElementById("nav"),
+    clearBtn: document.getElementById("clearBtn"),
+    top10Btn: document.getElementById("top10Btn"),
+    toggleAllBtn: document.getElementById("toggleAllBtn"),
+  };
+
+  async function fetchJSON(url) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`${url} -> ${r.status}`);
+    return r.json();
+  }
+
+  async function loadConfig() {
+    const cfg = await fetchJSON("/api/config");
+    const nav = [];
+    if (cfg.videos_enabled) nav.push(`<a href="/videos">rollouts</a>`);
+    if (cfg.checkpoints_enabled) nav.push(`<a href="/checkpoints" class="active">checkpoints</a>`);
+    els.nav.innerHTML = nav.join("");
+  }
+
+  async function loadDataset() {
+    const info = await fetchJSON("/api/ckpts/dataset");
+    const cfg = info.eval_config || {};
+    state.numTimesteps = cfg.num_timesteps || (cfg.brax_cfg && cfg.brax_cfg.num_timesteps) || null;
+    const bits = [];
+    if (cfg.env_name) bits.push(`env=${cfg.env_name}`);
+    if (cfg.num_morphologies) bits.push(`${cfg.num_morphologies} morphologies`);
+    if (cfg.episode_length) bits.push(`ep_len=${cfg.episode_length}`);
+    els.datasetInfo.textContent = `${info.root}${bits.length ? "  |  " + bits.join(", ") : ""}`;
+  }
+
+  async function loadRuns() {
+    const params = new URLSearchParams({
+      include_final_reward: "true",
+      with_eval_only: state.evalOnly ? "true" : "false",
+    });
+    state.runs = await fetchJSON(`/api/ckpts/runs?${params}`);
+    applyFilter();
+  }
+
+  async function loadCurve(runName) {
+    if (state.selected.has(runName)) return state.selected.get(runName);
+    const data = await fetchJSON(
+      `/api/ckpts/runs/${encodeURIComponent(runName)}/curve`
+    );
+    state.selected.set(runName, data);
+    return data;
+  }
+
+  function applyFilter() {
+    const q = state.search.trim().toLowerCase();
+    let out = state.runs;
+    if (q) {
+      out = out.filter((r) => {
+        if (r.name.toLowerCase().includes(q)) return true;
+        if (r.morphology_seed != null && String(r.morphology_seed).includes(q)) return true;
+        if (r.train_seed != null && String(r.train_seed).includes(q)) return true;
+        if (r.morphology_scales) {
+          for (const k of Object.keys(r.morphology_scales)) {
+            if (k.toLowerCase().includes(q)) return true;
+            if (String(r.morphology_scales[k].toFixed(3)).includes(q)) return true;
+          }
+        }
+        return false;
+      });
+    }
+    const sortBy = state.sortBy;
+    out = [...out];
+    out.sort((a, b) => {
+      if (sortBy === "run_suffix") return a.run_suffix - b.run_suffix;
+      const ar = a.final_reward == null ? -Infinity : a.final_reward;
+      const br = b.final_reward == null ? -Infinity : b.final_reward;
+      if (sortBy === "final_reward_desc") return br - ar;
+      if (sortBy === "final_reward_asc") return ar - br;
+      return 0;
+    });
+    state.filtered = out;
+    renderRunList();
+  }
+
+  function rewardClass(v) {
+    if (v == null) return "";
+    if (v >= 4000) return "good";
+    if (v < 1000) return "bad";
+    return "";
+  }
+
+  function renderRunList() {
+    if (state.filtered.length === 0) {
+      els.runList.innerHTML = `<div style="padding:12px; color: var(--text-dim); font-size: 12px;">No runs match filter.</div>`;
+      els.runFooter.textContent = `0 / ${state.runs.length} runs`;
+      return;
+    }
+    const MAX_RENDER = 2000;
+    const rows = state.filtered.slice(0, MAX_RENDER);
+    const html = rows.map((r) => {
+      const checked = state.selected.has(r.name);
+      const rewardTxt = r.final_reward == null ? "-" : r.final_reward.toFixed(0);
+      const noEval = !r.has_eval_curve ? " no-eval" : "";
+      return `<div class="run-item${checked ? " checked" : ""}${noEval}" data-name="${r.name}">
+        <input type="checkbox" ${checked ? "checked" : ""} />
+        <span class="rid" title="${r.name}">${r.name}</span>
+        <span class="reward ${rewardClass(r.final_reward)}">${rewardTxt}</span>
+      </div>`;
+    }).join("");
+    els.runList.innerHTML = html;
+    els.runList.querySelectorAll(".run-item").forEach((el) => {
+      el.addEventListener("click", () => toggleRun(el.dataset.name));
+    });
+    const extra = state.filtered.length > MAX_RENDER
+      ? ` (showing first ${MAX_RENDER})` : "";
+    els.runFooter.textContent =
+      `${state.filtered.length} / ${state.runs.length} runs${extra} | ${state.selected.size} selected`;
+  }
+
+  async function toggleRun(runName) {
+    if (state.selected.has(runName)) {
+      state.selected.delete(runName);
+    } else {
+      try {
+        await loadCurve(runName);
+      } catch (e) {
+        console.error(e);
+        alert(`Failed to load curve for ${runName}: ${e.message}`);
+        return;
+      }
+    }
+    renderRunList();
+    renderChart();
+    renderMeta();
+    els.selCount.textContent = state.selected.size;
+  }
+
+  function xValues(n) {
+    if (state.xMode === "fraction") {
+      if (n <= 1) return [0];
+      return Array.from({ length: n }, (_, i) => i / (n - 1));
+    }
+    if (state.xMode === "step" && state.numTimesteps) {
+      const step = state.numTimesteps / n;
+      return Array.from({ length: n }, (_, i) => i * step);
+    }
+    return Array.from({ length: n }, (_, i) => i);
+  }
+
+  function xAxisTitle() {
+    if (state.xMode === "fraction") return "training progress (fraction)";
+    if (state.xMode === "step") return "approx. training step";
+    return "checkpoint index";
+  }
+
+  function colorFor(runName) {
+    const names = [...state.selected.keys()];
+    const idx = names.indexOf(runName);
+    return PALETTE[idx % PALETTE.length];
+  }
+
+  function renderChart() {
+    if (state.selected.size === 0) {
+      els.chart.style.display = "none";
+      els.chartEmpty.style.display = "flex";
+      return;
+    }
+    els.chartEmpty.style.display = "none";
+    els.chart.style.display = "block";
+
+    const traces = [];
+    for (const [name, data] of state.selected.entries()) {
+      const x = xValues(data.num_ckpts);
+      traces.push({
+        x,
+        y: data.rewards,
+        type: "scatter",
+        mode: "lines",
+        name: name,
+        line: { color: colorFor(name), width: 1.8 },
+        hovertemplate: `${name}<br>${state.xMode}: %{x}<br>reward: %{y:.1f}<extra></extra>`,
+      });
+    }
+
+    const layout = {
+      paper_bgcolor: "#0f1117",
+      plot_bgcolor: "#0f1117",
+      font: { color: "#e0e0e6", size: 11, family: "monospace" },
+      margin: { l: 60, r: 20, t: 20, b: 48 },
+      xaxis: {
+        title: { text: xAxisTitle(), font: { size: 12 } },
+        gridcolor: "#2a2e3a", zerolinecolor: "#2a2e3a",
+      },
+      yaxis: {
+        title: { text: "eval/episode_reward", font: { size: 12 } },
+        gridcolor: "#2a2e3a", zerolinecolor: "#2a2e3a",
+      },
+      showlegend: false,
+      hovermode: "x unified",
+    };
+    Plotly.react("chart", traces, layout, { responsive: true, displaylogo: false });
+  }
+
+  function fmtNum(v) {
+    if (typeof v !== "number") return String(v);
+    if (Math.abs(v) >= 1000) return v.toExponential(3);
+    if (Math.abs(v) < 0.01 && v !== 0) return v.toExponential(3);
+    return v.toFixed(4);
+  }
+
+  function renderMeta() {
+    if (state.selected.size === 0) {
+      els.metaPanel.innerHTML = `
+        <h3>Run metadata</h3>
+        <div class="empty-meta">Select runs to see per-run metadata.</div>`;
+      return;
+    }
+
+    const entries = [];
+    const allScales = new Set();
+    let anyMorphology = false;
+    for (const [name, data] of state.selected.entries()) {
+      const m = data.morphology_metadata || {};
+      const scales = m.morphology_scales || {};
+      Object.keys(scales).forEach((k) => allScales.add(k));
+      if (Object.keys(m).length > 0) anyMorphology = true;
+      entries.push({ name, meta: m, scales, source: data.source });
+    }
+    const scaleKeys = [...allScales].sort();
+
+    let html = `<h3>Run metadata (${entries.length} selected)</h3>`;
+    html += `<table><thead><tr>`;
+    html += `<th>run</th>`;
+    html += `<th>source</th>`;
+    if (anyMorphology) {
+      html += `<th>morph_seed</th><th>train_seed</th>`;
+      for (const k of scaleKeys) html += `<th>${k}</th>`;
+    }
+    html += `</tr></thead><tbody>`;
+    for (const e of entries) {
+      const color = colorFor(e.name);
+      html += `<tr>`;
+      html += `<td><span class="swatch" style="background:${color}"></span>${e.name}</td>`;
+      html += `<td>${e.source || "-"}</td>`;
+      if (anyMorphology) {
+        html += `<td>${e.meta.morphology_seed ?? "-"}</td>`;
+        html += `<td>${e.meta.train_seed ?? "-"}</td>`;
+        for (const k of scaleKeys) {
+          const v = e.scales[k];
+          html += `<td>${v == null ? "-" : fmtNum(v)}</td>`;
+        }
+      }
+      html += `</tr>`;
+    }
+    html += `</tbody></table>`;
+
+    // DR bounds (if present on first selected run; constant across runs in a dataset).
+    const dr = entries[0].meta.domain_rand;
+    if (dr) {
+      html += `<h3 style="margin-top:12px;">Domain randomization</h3>`;
+      html += `<div style="font-family: monospace; font-size: 11px;">`;
+      html += Object.entries(dr).map(([k, v]) =>
+        `<div style="padding: 2px 0;">
+          <span style="color: var(--text-dim);">${k}:</span>
+          <span> ${Array.isArray(v) ? `[${v.map(fmtNum).join(", ")}]` : JSON.stringify(v)}</span>
+        </div>`
+      ).join("");
+      html += `</div>`;
+    }
+
+    els.metaPanel.innerHTML = html;
+  }
+
+  els.search.addEventListener("input", (e) => {
+    state.search = e.target.value;
+    applyFilter();
+  });
+  els.sortBy.addEventListener("change", (e) => {
+    state.sortBy = e.target.value;
+    applyFilter();
+  });
+  els.evalOnly.addEventListener("change", async (e) => {
+    state.evalOnly = e.target.checked;
+    await loadRuns();
+  });
+  els.clearBtn.addEventListener("click", () => {
+    state.selected.clear();
+    renderRunList();
+    renderChart();
+    renderMeta();
+    els.selCount.textContent = 0;
+  });
+  els.toggleAllBtn.addEventListener("click", async () => {
+    // Only runs with an eval curve can be plotted; skip the rest silently.
+    const targetNames = state.filtered
+      .filter((r) => r.has_eval_curve)
+      .map((r) => r.name);
+    if (targetNames.length === 0) return;
+
+    const allSelected = targetNames.every((n) => state.selected.has(n));
+    if (allSelected) {
+      targetNames.forEach((n) => state.selected.delete(n));
+    } else {
+      const toAdd = targetNames.filter((n) => !state.selected.has(n));
+      if (toAdd.length > 200 && !confirm(
+        `Load ${toAdd.length} reward curves? The chart can get crowded; ` +
+        `consider filtering first.`
+      )) {
+        return;
+      }
+      els.toggleAllBtn.disabled = true;
+      els.toggleAllBtn.textContent = `Loading ${toAdd.length}...`;
+      try {
+        const CONCURRENCY = 16;
+        for (let i = 0; i < toAdd.length; i += CONCURRENCY) {
+          const chunk = toAdd.slice(i, i + CONCURRENCY);
+          await Promise.all(
+            chunk.map((n) => loadCurve(n).catch((e) => console.error(n, e)))
+          );
+        }
+      } finally {
+        els.toggleAllBtn.disabled = false;
+        els.toggleAllBtn.textContent = "Toggle all (filtered)";
+      }
+    }
+    renderRunList();
+    renderChart();
+    renderMeta();
+    els.selCount.textContent = state.selected.size;
+  });
+
+  els.top10Btn.addEventListener("click", async () => {
+    const top = [...state.runs]
+      .filter((r) => r.final_reward != null)
+      .sort((a, b) => b.final_reward - a.final_reward)
+      .slice(0, 10);
+    state.selected.clear();
+    for (const r of top) {
+      try { await loadCurve(r.name); } catch (e) { console.error(e); }
+    }
+    renderRunList();
+    renderChart();
+    renderMeta();
+    els.selCount.textContent = state.selected.size;
+  });
+
+  document.querySelectorAll(".x-axis-toggle button").forEach((b) => {
+    b.addEventListener("click", () => {
+      if (b.dataset.x === "step" && !state.numTimesteps) {
+        alert("num_timesteps is not in the dataset config; can't show approximate step.");
+        return;
+      }
+      state.xMode = b.dataset.x;
+      document.querySelectorAll(".x-axis-toggle button").forEach((x) =>
+        x.classList.toggle("active", x === b)
+      );
+      els.xAxisLabel.textContent = `x-axis: ${xAxisTitle()}`;
+      renderChart();
+    });
+  });
+
+  window.addEventListener("resize", () => {
+    if (state.selected.size > 0) Plotly.Plots.resize("chart");
+  });
+
+  (async function init() {
+    try {
+      await loadConfig();
+      await loadDataset();
+      await loadRuns();
+    } catch (e) {
+      console.error(e);
+      els.runList.innerHTML =
+        `<div style="padding:12px; color: #ff6b6b; font-size: 12px;">Failed to load: ${e.message}</div>`;
+    }
+  })();
+})();
+</script>
+</body>
+</html>

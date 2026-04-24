@@ -14,6 +14,7 @@ dependencies = [
 dashboard = [
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.29.0",
+    "pyyaml>=6.0",
 ]
 tpu = ["jax[tpu]>=0.4.30"]
 gpu = ["jax[cuda12]>=0.4.30"]
