@@ -25,10 +25,27 @@
   /* Layout */
   .app { display: grid; grid-template-columns: var(--sidebar-w) 1fr;
          grid-template-rows: 48px 1fr; height: 100vh; }
+  /* Fullscreen mode: hide header, sidebar, and toolbar so the iframe owns the entire viewport. */
+  .app.fullscreen { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+  .app.fullscreen .header,
+  .app.fullscreen .sidebar,
+  .app.fullscreen .toolbar { display: none; }
   .header { grid-column: 1 / -1; display: flex; align-items: center;
             padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--border);
             gap: 12px; }
   .header h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.5px; }
+  .header button { background: var(--bg); border: 1px solid var(--border);
+                   color: var(--text-dim); font-size: 11px; padding: 4px 10px;
+                   border-radius: 4px; cursor: pointer; font-family: inherit; }
+  .header button:hover { color: var(--text); border-color: var(--accent-dim); }
+  /* Floating "exit fullscreen" button only visible in fullscreen mode. */
+  .exit-fs { position: fixed; top: 12px; right: 12px; z-index: 10;
+             background: rgba(24,27,36,0.85); color: var(--text);
+             border: 1px solid var(--border); border-radius: 4px;
+             padding: 6px 12px; font-size: 11px; cursor: pointer;
+             font-family: inherit; display: none; }
+  .app.fullscreen .exit-fs { display: block; }
+  .exit-fs:hover { border-color: var(--accent); }
   .status { margin-left: auto; display: flex; align-items: center; gap: 6px;
             font-size: 12px; color: var(--text-dim); }
   .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--badge); }
@@ -75,6 +92,17 @@
   .episode-tab.active { background: var(--accent-dim); border-color: var(--accent);
                         color: #fff; }
 
+  /* View-mode toggle: brax 3D viewer ↔ trajectory plots (rollout_env*_traj.html). */
+  .view-toggle { display: inline-flex; gap: 0; margin-left: auto; }
+  .view-toggle button { background: var(--bg); border: 1px solid var(--border);
+                        color: var(--text-dim); font-size: 11px; padding: 4px 10px;
+                        cursor: pointer; font-family: monospace; }
+  .view-toggle button:first-child { border-radius: 4px 0 0 4px; }
+  .view-toggle button:last-child { border-radius: 0 4px 4px 0; border-left: none; }
+  .view-toggle button.active { background: var(--accent-dim); border-color: var(--accent);
+                               color: #fff; }
+  .view-toggle button:hover:not(.active) { color: var(--text); }
+
   .viewer { flex: 1; position: relative; background: var(--bg); }
   .viewer iframe { width: 100%; height: 100%; border: none; }
   .viewer .empty { position: absolute; inset: 0; display: flex; align-items: center;
@@ -87,14 +115,16 @@
 </style>
 </head>
 <body>
-<div class="app">
+<div class="app" id="app">
   <div class="header">
     <h1>GO2 TRAINING DASHBOARD</h1>
+    <button id="fullscreenBtn" title="Hide sidebar/toolbar (or press F)">Fullscreen</button>
     <div class="status">
       <div class="status-dot" id="statusDot"></div>
       <span id="statusText">Connecting...</span>
     </div>
   </div>
+  <button class="exit-fs" id="exitFsBtn" title="Press F or Esc to exit">Exit fullscreen</button>
 
   <div class="sidebar" id="sidebar">
     <div style="padding: 12px; color: var(--text-dim); font-size: 12px;">Loading runs...</div>
@@ -104,6 +134,10 @@
     <div class="toolbar" id="toolbar">
       <div class="breadcrumb" id="breadcrumb">Select a run and step from the sidebar</div>
       <div class="episode-tabs" id="episodeTabs"></div>
+      <div class="view-toggle" id="viewToggle">
+        <button data-view="3d" class="active" title="Brax 3D viewer">3D View</button>
+        <button data-view="traj" title="Plotly trajectory plots (actions, thrust, pos, vel, ω)">Plots</button>
+      </div>
     </div>
     <div class="viewer" id="viewer">
       <div class="empty" id="emptyState">
@@ -125,6 +159,8 @@
   let selectedRun = null;
   let selectedStep = null;
   let selectedFile = null;
+  // viewMode: '3d' loads rollout_envXX.html; 'traj' loads rollout_envXX_traj.html
+  let viewMode = '3d';
 
   const sidebar = document.getElementById('sidebar');
   const breadcrumb = document.getElementById('breadcrumb');
@@ -226,6 +262,9 @@
     breadcrumb.innerHTML = `<span>${fmtRunName(runName)}</span> / <span>step ${fmtStep(step)}</span>`;
     episodeTabs.innerHTML = '';
     for (const ep of episodes) {
+      // Skip _traj.html companions — they're alternate views of the matching
+      // rollout_env*.html, surfaced via the View toggle, not as separate tabs.
+      if (ep.endsWith('_traj.html')) continue;
       const info = parseEpisodeName(ep);
       const tab = document.createElement('div');
       tab.className = 'episode-tab' + (ep === selectedFile ? ' active' : '');
@@ -244,12 +283,18 @@
       if (t.textContent === info.profile + ' #' + info.ep) t.classList.add('active');
     });
 
-    // Build file path
+    // Build file path. In 'traj' mode, swap the .html extension for _traj.html
+    // so that rollout_env00.html becomes rollout_env00_traj.html.
+    let resolvedFilename = filename;
+    if (viewMode === 'traj' && filename.endsWith('.html')) {
+      resolvedFilename = filename.replace(/\.html$/, '_traj.html');
+    }
+
     let filePath;
     if (runName === '__default__') {
-      filePath = `step_${step}/${filename}`;
+      filePath = `step_${step}/${resolvedFilename}`;
     } else {
-      filePath = `${runName}/step_${step}/${filename}`;
+      filePath = `${runName}/step_${step}/${resolvedFilename}`;
     }
 
     emptyState.style.display = 'none';
@@ -275,6 +320,39 @@
       statusText.textContent = 'Reconnecting...';
     };
   }
+
+  // ---- View-mode toggle (3D viewer ↔ trajectory plots) ----
+  const viewToggleEl = document.getElementById('viewToggle');
+  viewToggleEl.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      viewMode = btn.dataset.view;
+      viewToggleEl.querySelectorAll('button').forEach(b =>
+        b.classList.toggle('active', b === btn));
+      // Re-load the currently selected episode under the new view mode.
+      if (selectedRun !== null && selectedStep !== null && selectedFile !== null) {
+        selectEpisode(selectedRun, selectedStep, selectedFile);
+      }
+    });
+  });
+
+  // ---- Fullscreen toggle ----
+  const appEl = document.getElementById('app');
+  const fsBtn = document.getElementById('fullscreenBtn');
+  const exitFsBtn = document.getElementById('exitFsBtn');
+  function setFullscreen(on) {
+    appEl.classList.toggle('fullscreen', on);
+  }
+  fsBtn.addEventListener('click', () => setFullscreen(true));
+  exitFsBtn.addEventListener('click', () => setFullscreen(false));
+  document.addEventListener('keydown', (e) => {
+    // Ignore key events from inside the iframe / form fields
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key === 'f' || e.key === 'F') {
+      setFullscreen(!appEl.classList.contains('fullscreen'));
+    } else if (e.key === 'Escape' && appEl.classList.contains('fullscreen')) {
+      setFullscreen(false);
+    }
+  });
 
   // ---- Init ----
   fetchRuns().then(connectSSE);
