@@ -288,7 +288,10 @@
     emptyState.style.display = 'none';
     loading.classList.add('show');
     vizFrame.style.display = 'block';
-    vizFrame.src = '/api/files/' + encodeURI(filePath);
+    // Cache-bust: training_curves.html is rewritten each eval, and browsers
+    // will skip refetching an iframe whose src string is byte-identical, so
+    // append ?t=now to force a reload even if the URL would otherwise match.
+    vizFrame.src = '/api/files/' + encodeURI(filePath) + '?t=' + Date.now();
     vizFrame.onload = () => loading.classList.remove('show');
   }
 

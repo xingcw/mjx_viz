@@ -80,29 +80,38 @@ async def watch_sse(videos_dir: str, poll_interval: float = 2.0) -> AsyncIterato
 
     Uses simple polling (works on any filesystem including NFS/network mounts).
     Each event is a ``data: ...`` line ready for the SSE protocol.
+
+    Tracks mtimes (not just paths) so files rewritten in place — like
+    ``training_curves.html`` — also fire events.
     """
     known = _snapshot(videos_dir)
 
     while True:
         await asyncio.sleep(poll_interval)
         current = _snapshot(videos_dir)
-        new_files = current - known
-        if new_files:
+        changed = [
+            p for p, mt in current.items()
+            if known.get(p) != mt  # new path OR same path with newer mtime
+        ]
+        if changed:
             known = current
-            for fpath in sorted(new_files):
+            for fpath in sorted(changed):
                 parts = _parse_file_event(videos_dir, fpath)
                 if parts:
                     payload = json.dumps(parts)
                     yield f"data: {payload}\n\n"
 
 
-def _snapshot(videos_dir: str) -> set[str]:
-    """Return set of all .html file paths under videos_dir."""
-    result = set()
+def _snapshot(videos_dir: str) -> dict[str, float]:
+    """Return ``{path: mtime}`` for every .html file under videos_dir."""
+    result: dict[str, float] = {}
     root = Path(videos_dir)
     if root.is_dir():
         for html in root.rglob("*.html"):
-            result.add(str(html))
+            try:
+                result[str(html)] = html.stat().st_mtime
+            except OSError:
+                continue
     return result
 
 
@@ -125,6 +134,12 @@ def _parse_file_event(videos_dir: str, filepath: str) -> dict | None:
             if step is not None:
                 return {"type": "new_file", "run": "__default__",
                         "step": step, "file": parts[1]}
+
+        # Run-level file: run_name/<file>.html (e.g. training_curves.html).
+        # Surfaced so the SSE stream fires on per-eval rewrites of run-scoped
+        # artifacts; the frontend treats any event as "refresh".
+        if len(parts) == 2 and not parts[0].startswith("step_"):
+            return {"type": "run_file", "run": parts[0], "file": parts[1]}
     except (ValueError, IndexError):
         pass
     return None

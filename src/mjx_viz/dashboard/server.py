@@ -195,10 +195,18 @@ def create_app(
                 raise HTTPException(403, "Access denied")
             if not full_path.is_file():
                 raise HTTPException(404, "File not found")
+            # training_curves.html is rewritten in place each eval — anything
+            # else (per-step rollouts, traj plots) is write-once. Disable
+            # caching for the mutating file so the iframe always sees fresh
+            # panels; keep the long cache for the immutable rollouts.
+            if full_path.name == "training_curves.html":
+                cache_header = "no-cache, no-store, must-revalidate"
+            else:
+                cache_header = "public, max-age=3600"
             return FileResponse(
                 str(full_path),
                 media_type="text/html",
-                headers={"Cache-Control": "public, max-age=3600"},
+                headers={"Cache-Control": cache_header},
             )
 
         @app.get("/api/events")
