@@ -16,6 +16,7 @@ dashboard = [
     "uvicorn[standard]>=0.29.0",
     "pyyaml>=6.0",
 ]
+plots = ["plotly>=5.20"]
 tpu = ["jax[tpu]>=0.4.30"]
 gpu = ["jax[cuda12]>=0.4.30"]
 dev = ["pytest>=8.0", "ruff>=0.4.0"]
