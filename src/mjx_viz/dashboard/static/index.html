@@ -136,7 +136,8 @@
       <div class="episode-tabs" id="episodeTabs"></div>
       <div class="view-toggle" id="viewToggle">
         <button data-view="3d" class="active" title="Brax 3D viewer">3D View</button>
-        <button data-view="traj" title="Plotly trajectory plots (actions, thrust, pos, vel, ω)">Plots</button>
+        <button data-view="traj" title="Plotly per-step trajectory plots (actions, thrust, pos, vel, ω, rewards, gate b-frame…)">Plots</button>
+        <button data-view="training" title="Per-eval training curves for the selected run (losses, KL, ep length, gate stats…)">Training</button>
       </div>
     </div>
     <div class="viewer" id="viewer">
@@ -159,7 +160,9 @@
   let selectedRun = null;
   let selectedStep = null;
   let selectedFile = null;
-  // viewMode: '3d' loads rollout_envXX.html; 'traj' loads rollout_envXX_traj.html
+  // viewMode: '3d' loads rollout_envXX.html (per step+episode);
+  //           'traj' loads rollout_envXX_traj.html (per step+episode);
+  //           'training' loads training_curves.html (per run, ignores step/episode).
   let viewMode = '3d';
 
   const sidebar = document.getElementById('sidebar');
@@ -234,6 +237,12 @@
       el.addEventListener('click', () => {
         const name = el.dataset.run;
         openRuns[name] = !openRuns[name];
+        // In training-curves view the run header is also a "select run"
+        // gesture, since steps/episodes aren't relevant.
+        if (viewMode === 'training') {
+          selectedRun = name;
+          loadTrainingCurves(name);
+        }
         renderSidebar();
       });
     });
@@ -249,6 +258,13 @@
     openRuns[runName] = true;
     renderSidebar();
 
+    // Clicking a step while in training-curves view jumps back to 3D so the
+    // selection is meaningful (training_curves.html is run-level, not per-step).
+    if (viewMode === 'training') {
+      setActiveViewButton('3d');
+      viewMode = '3d';
+    }
+
     const episodes = await fetchEpisodes(runName, step);
     renderEpisodes(episodes, runName, step);
 
@@ -256,6 +272,29 @@
     if (episodes.length > 0) {
       selectEpisode(runName, step, episodes[0]);
     }
+  }
+
+  // ---- Run-level: training curves ----
+  function loadTrainingCurves(runName) {
+    if (!runName) {
+      breadcrumb.innerHTML = '<span style="color:var(--text-dim);">Select a run from the sidebar to view training curves</span>';
+      vizFrame.style.display = 'none';
+      emptyState.style.display = 'flex';
+      return;
+    }
+    breadcrumb.innerHTML = `<span>${fmtRunName(runName)}</span> / <span style="color:var(--accent);">training curves</span>`;
+    episodeTabs.innerHTML = '';
+    const filePath = `${runName}/training_curves.html`;
+    emptyState.style.display = 'none';
+    loading.classList.add('show');
+    vizFrame.style.display = 'block';
+    vizFrame.src = '/api/files/' + encodeURI(filePath);
+    vizFrame.onload = () => loading.classList.remove('show');
+  }
+
+  function setActiveViewButton(view) {
+    viewToggleEl.querySelectorAll('button').forEach(b =>
+      b.classList.toggle('active', b.dataset.view === view));
   }
 
   function renderEpisodes(episodes, runName, step) {
@@ -314,6 +353,11 @@
     es.onmessage = (evt) => {
       // Refresh runs list on any new file event
       fetchRuns();
+      // Training curves are overwritten in place each eval — refresh the
+      // iframe in training-curves view so newly-written panels show up.
+      if (viewMode === 'training' && selectedRun) {
+        loadTrainingCurves(selectedRun);
+      }
     };
     es.onerror = () => {
       statusDot.classList.remove('live');
@@ -321,13 +365,23 @@
     };
   }
 
-  // ---- View-mode toggle (3D viewer ↔ trajectory plots) ----
+  // ---- View-mode toggle (3D viewer ↔ trajectory plots ↔ training curves) ----
   const viewToggleEl = document.getElementById('viewToggle');
   viewToggleEl.querySelectorAll('button').forEach(btn => {
     btn.addEventListener('click', () => {
       viewMode = btn.dataset.view;
       viewToggleEl.querySelectorAll('button').forEach(b =>
         b.classList.toggle('active', b === btn));
+
+      if (viewMode === 'training') {
+        // Training curves are per-run, not per-step. Use the currently
+        // selected run, or the first run in the list, or show a hint.
+        const runForCurves = selectedRun || (runs.length > 0 ? runs[0].name : null);
+        if (runForCurves && !selectedRun) selectedRun = runForCurves;
+        loadTrainingCurves(runForCurves);
+        return;
+      }
+
       // Re-load the currently selected episode under the new view mode.
       if (selectedRun !== null && selectedStep !== null && selectedFile !== null) {
         selectEpisode(selectedRun, selectedStep, selectedFile);
