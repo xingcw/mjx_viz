@@ -34,7 +34,7 @@ import numpy as np
 import yaml
 
 
-RUN_DIR_RE = re.compile(r"^(?:run|ckpt)_(\d+)$")
+RUN_DIR_RE = re.compile(r"^(?:run|ckpt)_(\d+)(?:_[A-Za-z0-9._-]+)?$")
 
 # Names to probe, in priority order. The first that exists wins.
 _EVAL_PKL_NAMES = ("morphology_eval_metrics.pkl", "eval_metrics.pkl")

@@ -62,14 +62,24 @@ def render_brax_html(
             "mjx_viz.html_render requires brax. Install with `pip install brax`."
         ) from e
 
-    # Override the model's opt.timestep with the *per-recorded-frame* wall-clock
-    # dt so brax's viewer (which builds keyframe times as
-    # `frame_idx × system.opt.timestep`) tracks physical time accurately. Apply
-    # this to a copy so we don't mutate the caller's mj_model.
+    # Build a render-only deepcopy so we can mutate it without touching the
+    # caller's mj_model. Two adjustments:
+    #   1. opt.timestep ← frame_dt so brax's viewer (which builds keyframe
+    #      times as `frame_idx × system.opt.timestep`) tracks physical time.
+    #   2. Any geom flagged as "render-invisible" via alpha == 0 has its size
+    #      zeroed. Brax's WebGL viewer (visualizer/js/system.js) ignores RGBA
+    #      alpha entirely, so without this, a transparent collision proxy
+    #      (e.g. a `cf_col` sphere with rgba="0 0 1 0") would overdraw the
+    #      real visual meshes as a solid color. Zero size collapses the
+    #      geometry to a degenerate point so three.js draws nothing.
+    import copy
+    import numpy as np
+    mj_model = copy.deepcopy(mj_model)
     if frame_dt is not None:
-        import copy
-        mj_model = copy.copy(mj_model)
         mj_model.opt.timestep = float(frame_dt)
+    invisible_geom_ids = np.flatnonzero(mj_model.geom_rgba[:, 3] == 0.0)
+    if invisible_geom_ids.size:
+        mj_model.geom_size[invisible_geom_ids] = 0.0
 
     sys = brax_load_model(mj_model)
 
