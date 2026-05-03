@@ -38,7 +38,10 @@
                   font-family: monospace; }
 
   .sidebar { background: var(--surface); border-right: 1px solid var(--border);
-             overflow: hidden; display: flex; flex-direction: column; }
+             overflow: hidden; display: flex; flex-direction: column; position: relative; }
+  .sidebar-resize { position: absolute; top: 0; right: -3px; width: 6px; height: 100%;
+                    cursor: col-resize; z-index: 20; }
+  .sidebar-resize:hover, .sidebar-resize.dragging { background: var(--accent); opacity: 0.5; }
   .controls { padding: 10px 12px; border-bottom: 1px solid var(--border);
               display: flex; flex-direction: column; gap: 8px; }
   .controls input, .controls select { background: var(--bg); color: var(--text);
@@ -137,6 +140,7 @@
       <div style="padding:12px; color: var(--text-dim); font-size: 12px;">Loading runs...</div>
     </div>
     <div class="footer" id="runFooter"></div>
+    <div class="sidebar-resize" id="sidebarResize"></div>
   </div>
 
   <div class="main">
@@ -564,6 +568,31 @@
       els.runList.innerHTML =
         `<div style="padding:12px; color: #ff6b6b; font-size: 12px;">Failed to load: ${e.message}</div>`;
     }
+  })();
+
+  // ---- Resizable sidebar ----
+  (function initSidebarResize() {
+    const handle = document.getElementById('sidebarResize');
+    let dragging = false;
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      dragging = true;
+      handle.classList.add('dragging');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const w = Math.max(160, Math.min(e.clientX, window.innerWidth - 200));
+      document.documentElement.style.setProperty('--sidebar-w', w + 'px');
+    });
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    });
   })();
 })();
 </script>

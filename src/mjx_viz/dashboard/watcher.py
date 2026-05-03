@@ -9,15 +9,23 @@ from pathlib import Path
 from typing import AsyncIterator
 
 
-def scan_runs(videos_dir: str) -> dict:
+def scan_runs(videos_dir: str, *, unified: bool = False) -> dict:
     """Walk the videos directory and return a structured index of all runs.
 
-    Supports two layouts:
-      - Named runs:  videos/{run_name}/step_{N}/*.html
-      - Legacy flat:  videos/step_{N}/*.html  (grouped under "__default__")
+    Layouts:
+      - unified=False (legacy):
+          {root}/{run_name}/step_{N}/*.html
+          {root}/step_{N}/*.html              (grouped under "__default__")
+      - unified=True (per-run unified folder):
+          {root}/{run_name}/rollouts/step_{N}/*.html
+          {root}/{run_name}/rollouts/final/*.html
+          {root}/{run_name}/rollouts/training_curves.html
+          run_meta.json sits at {root}/{run_name}/run_meta.json
 
     Returns:
-        {run_name: {"meta": dict | None, "steps": {step_int: [filenames]}}}
+        {run_name: {"meta": dict | None, "steps": {step_key: [filenames]}}}
+        where step_key is an int for `step_N` or the string "final" for the
+        post-training rollout.
     """
     root = Path(videos_dir)
     if not root.is_dir():
@@ -30,7 +38,7 @@ def scan_runs(videos_dir: str) -> dict:
             continue
 
         # Legacy flat layout: videos/step_N/
-        if entry.name.startswith("step_"):
+        if not unified and entry.name.startswith("step_"):
             step_num = _parse_step(entry.name)
             if step_num is None:
                 continue
@@ -38,15 +46,24 @@ def scan_runs(videos_dir: str) -> dict:
             run["steps"][step_num] = _list_html(entry)
             continue
 
-        # Named run layout: videos/{run_name}/step_N/
+        # Per-run layout. In unified mode we look inside `<run>/rollouts/`.
         meta = _load_meta(entry)
+        scan_dir = entry / "rollouts" if unified else entry
+        if not scan_dir.is_dir():
+            continue
         run = runs.setdefault(entry.name, {"meta": meta, "steps": {}})
-        for step_dir in sorted(entry.iterdir()):
-            if not step_dir.is_dir() or not step_dir.name.startswith("step_"):
+        for step_dir in sorted(scan_dir.iterdir()):
+            if not step_dir.is_dir():
                 continue
-            step_num = _parse_step(step_dir.name)
-            if step_num is not None:
-                run["steps"][step_num] = _list_html(step_dir)
+            if step_dir.name.startswith("step_"):
+                step_num = _parse_step(step_dir.name)
+                if step_num is not None:
+                    run["steps"][step_num] = _list_html(step_dir)
+            elif unified and step_dir.name == "final":
+                # Post-training rollout. Surfaced under the synthetic key
+                # "final" so the frontend can render it as a special entry
+                # at the bottom of the per-run step list.
+                run["steps"]["final"] = _list_html(step_dir)
 
     return runs
 
@@ -75,7 +92,9 @@ def _load_meta(run_dir: Path) -> dict | None:
     return None
 
 
-async def watch_sse(videos_dir: str, poll_interval: float = 2.0) -> AsyncIterator[str]:
+async def watch_sse(
+    videos_dir: str, poll_interval: float = 2.0, *, unified: bool = False,
+) -> AsyncIterator[str]:
     """Async generator that yields SSE-formatted events when HTML files change.
 
     Uses simple polling (works on any filesystem including NFS/network mounts).
@@ -96,7 +115,7 @@ async def watch_sse(videos_dir: str, poll_interval: float = 2.0) -> AsyncIterato
         if changed:
             known = current
             for fpath in sorted(changed):
-                parts = _parse_file_event(videos_dir, fpath)
+                parts = _parse_file_event(videos_dir, fpath, unified=unified)
                 if parts:
                     payload = json.dumps(parts)
                     yield f"data: {payload}\n\n"
@@ -115,13 +134,36 @@ def _snapshot(videos_dir: str) -> dict[str, float]:
     return result
 
 
-def _parse_file_event(videos_dir: str, filepath: str) -> dict | None:
+def _parse_file_event(
+    videos_dir: str, filepath: str, *, unified: bool = False,
+) -> dict | None:
     """Parse a filepath into a structured event dict."""
     try:
         rel = os.path.relpath(filepath, videos_dir)
         parts = Path(rel).parts
 
-        # Named run: run_name/step_N/filename.html
+        if unified:
+            # Unified: <run>/rollouts/step_N/filename.html
+            #          <run>/rollouts/final/filename.html
+            #          <run>/rollouts/training_curves.html
+            if len(parts) >= 3 and parts[1] == "rollouts":
+                if len(parts) == 4 and parts[2].startswith("step_"):
+                    step = _parse_step(parts[2])
+                    if step is not None:
+                        return {"type": "new_file", "run": parts[0],
+                                "step": step, "file": parts[3]}
+                if len(parts) == 4 and parts[2] == "final":
+                    return {"type": "new_file", "run": parts[0],
+                            "step": "final", "file": parts[3]}
+                if len(parts) == 3:
+                    return {"type": "run_file", "run": parts[0],
+                            "file": parts[2]}
+            # Run-level file (e.g. config.json refreshed): <run>/<file>
+            if len(parts) == 2:
+                return {"type": "run_file", "run": parts[0], "file": parts[1]}
+            return None
+
+        # Legacy named run: run_name/step_N/filename.html
         if len(parts) == 3 and parts[1].startswith("step_"):
             step = _parse_step(parts[1])
             if step is not None:

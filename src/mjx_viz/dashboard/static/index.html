@@ -53,9 +53,12 @@
 
   /* Sidebar */
   .sidebar { background: var(--surface); border-right: 1px solid var(--border);
-             overflow-y: auto; padding: 8px 0; }
+             overflow-y: auto; padding: 8px 0; position: relative; }
   .sidebar::-webkit-scrollbar { width: 4px; }
   .sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .sidebar-resize { position: absolute; top: 0; right: -3px; width: 6px; height: 100%;
+                    cursor: col-resize; z-index: 20; }
+  .sidebar-resize:hover, .sidebar-resize.dragging { background: var(--accent); opacity: 0.5; }
   .run-group { margin-bottom: 4px; }
   .run-header { display: flex; align-items: center; padding: 8px 12px; cursor: pointer;
                 font-size: 13px; font-weight: 600; color: var(--text-dim);
@@ -92,19 +95,30 @@
   .episode-tab.active { background: var(--accent-dim); border-color: var(--accent);
                         color: #fff; }
 
-  /* View-mode toggle: brax 3D viewer ↔ trajectory plots (rollout_env*_traj.html). */
+  /* View-mode toggle: brax 3D viewer ↔ trajectory plots ↔ training curves
+     ↔ per-run config.json ↔ per-run log.txt. */
   .view-toggle { display: inline-flex; gap: 0; margin-left: auto; }
   .view-toggle button { background: var(--bg); border: 1px solid var(--border);
                         color: var(--text-dim); font-size: 11px; padding: 4px 10px;
-                        cursor: pointer; font-family: monospace; }
-  .view-toggle button:first-child { border-radius: 4px 0 0 4px; }
-  .view-toggle button:last-child { border-radius: 0 4px 4px 0; border-left: none; }
+                        cursor: pointer; font-family: monospace; border-left: none; }
+  .view-toggle button:first-child { border-radius: 4px 0 0 4px; border-left: 1px solid var(--border); }
+  .view-toggle button:last-child { border-radius: 0 4px 4px 0; }
   .view-toggle button.active { background: var(--accent-dim); border-color: var(--accent);
                                color: #fff; }
   .view-toggle button:hover:not(.active) { color: var(--text); }
+  .view-toggle button[hidden] { display: none; }
+
+  /* "final" rollout marker: post-training run, surfaced in the step list. */
+  .step-item.final-step .step-label::before { content: "★ "; color: var(--green); }
 
   .viewer { flex: 1; position: relative; background: var(--bg); }
   .viewer iframe { width: 100%; height: 100%; border: none; }
+  .viewer pre.text-view { width: 100%; height: 100%; margin: 0; padding: 16px;
+                           background: var(--bg); color: var(--text);
+                           font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+                           font-size: 12px; line-height: 1.5; overflow: auto;
+                           white-space: pre-wrap; word-break: break-word;
+                           box-sizing: border-box; }
   .viewer .empty { position: absolute; inset: 0; display: flex; align-items: center;
                    justify-content: center; color: var(--text-dim); font-size: 14px;
                    flex-direction: column; gap: 8px; }
@@ -128,6 +142,7 @@
 
   <div class="sidebar" id="sidebar">
     <div style="padding: 12px; color: var(--text-dim); font-size: 12px;">Loading runs...</div>
+    <div class="sidebar-resize" id="sidebarResize"></div>
   </div>
 
   <div class="main">
@@ -138,6 +153,8 @@
         <button data-view="3d" class="active" title="Brax 3D viewer">3D View</button>
         <button data-view="traj" title="Plotly per-step trajectory plots (actions, thrust, pos, vel, ω, rewards, gate b-frame…)">Plots</button>
         <button data-view="training" title="Per-eval training curves for the selected run (losses, KL, ep length, gate stats…)">Training</button>
+        <button data-view="config" id="viewConfigBtn" hidden title="Per-run config.json (full CLI args + env config)">Config</button>
+        <button data-view="log" id="viewLogBtn" hidden title="Per-run log.txt (last 2000 lines)">Log</button>
       </div>
     </div>
     <div class="viewer" id="viewer">
@@ -148,6 +165,7 @@
       <div class="loading" id="loading">Loading visualization...</div>
       <iframe id="vizFrame" style="display:none"
               sandbox="allow-scripts allow-same-origin"></iframe>
+      <pre id="textView" class="text-view" style="display:none"></pre>
     </div>
   </div>
 </div>
@@ -160,21 +178,39 @@
   let selectedRun = null;
   let selectedStep = null;
   let selectedFile = null;
+  let unified = false;  // set by /api/config: enables Config and Log views
   // viewMode: '3d' loads rollout_envXX.html (per step+episode);
   //           'traj' loads rollout_envXX_traj.html (per step+episode);
-  //           'training' loads training_curves.html (per run, ignores step/episode).
+  //           'training' loads training_curves.html (per run, ignores step/episode);
+  //           'config' renders the per-run config.json as text;
+  //           'log' renders the per-run log.txt as text.
   let viewMode = '3d';
 
   const sidebar = document.getElementById('sidebar');
   const breadcrumb = document.getElementById('breadcrumb');
   const episodeTabs = document.getElementById('episodeTabs');
   const vizFrame = document.getElementById('vizFrame');
+  const textView = document.getElementById('textView');
   const emptyState = document.getElementById('emptyState');
   const loading = document.getElementById('loading');
   const statusDot = document.getElementById('statusDot');
   const statusText = document.getElementById('statusText');
+  const viewConfigBtn = document.getElementById('viewConfigBtn');
+  const viewLogBtn = document.getElementById('viewLogBtn');
 
   // ---- API helpers ----
+  async function fetchDashboardConfig() {
+    try {
+      const resp = await fetch('/api/config');
+      if (!resp.ok) return;
+      const cfg = await resp.json();
+      unified = !!cfg.unified;
+      // Per-run config.json + log.txt only exist in unified mode.
+      viewConfigBtn.hidden = !unified;
+      viewLogBtn.hidden = !unified;
+    } catch (_) { /* noop */ }
+  }
+
   async function fetchRuns() {
     const resp = await fetch('/api/runs');
     runs = await resp.json();
@@ -182,12 +218,30 @@
   }
 
   async function fetchEpisodes(runName, step) {
-    const resp = await fetch(`/api/runs/${encodeURIComponent(runName)}/steps/${step}/episodes`);
+    const resp = await fetch(`/api/runs/${encodeURIComponent(runName)}/steps/${encodeURIComponent(step)}/episodes`);
     return resp.json();
+  }
+
+  // Show one of the three viewer surfaces (iframe, pre, or empty hint).
+  function showFrame() {
+    emptyState.style.display = 'none';
+    textView.style.display = 'none';
+    vizFrame.style.display = 'block';
+  }
+  function showText() {
+    emptyState.style.display = 'none';
+    vizFrame.style.display = 'none';
+    textView.style.display = 'block';
+  }
+  function showEmpty() {
+    vizFrame.style.display = 'none';
+    textView.style.display = 'none';
+    emptyState.style.display = 'flex';
   }
 
   // ---- Format helpers ----
   function fmtStep(n) {
+    if (n === 'final') return 'final rollout';
     if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
     if (n >= 1e3) return (n / 1e3).toFixed(0) + 'K';
     return String(n);
@@ -224,8 +278,11 @@
       html += `<div class="step-list ${isOpen ? 'open' : ''}">`;
       for (const step of run.steps) {
         const active = selectedRun === run.name && selectedStep === step;
-        html += `<div class="step-item ${active ? 'active' : ''}" data-run="${run.name}" data-step="${step}">`;
-        html += `<span class="step-label">step ${fmtStep(step)}</span>`;
+        const isFinal = step === 'final';
+        const cls = `step-item ${active ? 'active' : ''}${isFinal ? ' final-step' : ''}`;
+        html += `<div class="${cls}" data-run="${run.name}" data-step="${step}">`;
+        const label = isFinal ? 'final rollout' : `step ${fmtStep(step)}`;
+        html += `<span class="step-label">${label}</span>`;
         html += `</div>`;
       }
       html += `</div></div>`;
@@ -237,17 +294,23 @@
       el.addEventListener('click', () => {
         const name = el.dataset.run;
         openRuns[name] = !openRuns[name];
-        // In training-curves view the run header is also a "select run"
-        // gesture, since steps/episodes aren't relevant.
-        if (viewMode === 'training') {
+        // Run-level views (training/config/log) also use the run header as
+        // a "select run" gesture, since step/episode selection is irrelevant.
+        if (viewMode === 'training' || viewMode === 'config' || viewMode === 'log') {
           selectedRun = name;
-          loadTrainingCurves(name);
+          loadRunLevelView(viewMode, name);
         }
         renderSidebar();
       });
     });
     sidebar.querySelectorAll('.step-item').forEach(el => {
-      el.addEventListener('click', () => selectStep(el.dataset.run, parseInt(el.dataset.step)));
+      el.addEventListener('click', () => {
+        const raw = el.dataset.step;
+        // 'final' stays a string; numeric steps become ints (so equality
+        // checks against the int keys returned by /api/runs work).
+        const step = raw === 'final' ? 'final' : parseInt(raw);
+        selectStep(el.dataset.run, step);
+      });
     });
   }
 
@@ -258,9 +321,9 @@
     openRuns[runName] = true;
     renderSidebar();
 
-    // Clicking a step while in training-curves view jumps back to 3D so the
-    // selection is meaningful (training_curves.html is run-level, not per-step).
-    if (viewMode === 'training') {
+    // Clicking a step while in a run-level view (training/config/log) jumps
+    // back to 3D so the per-step selection is meaningful again.
+    if (viewMode === 'training' || viewMode === 'config' || viewMode === 'log') {
       setActiveViewButton('3d');
       viewMode = '3d';
     }
@@ -274,25 +337,75 @@
     }
   }
 
-  // ---- Run-level: training curves ----
-  function loadTrainingCurves(runName) {
+  // ---- Run-level views: training curves / config.json / log.txt ----
+  function loadRunLevelView(view, runName) {
     if (!runName) {
-      breadcrumb.innerHTML = '<span style="color:var(--text-dim);">Select a run from the sidebar to view training curves</span>';
-      vizFrame.style.display = 'none';
-      emptyState.style.display = 'flex';
+      const label = view === 'training' ? 'training curves'
+                  : view === 'config'   ? 'config.json'
+                  : view === 'log'      ? 'log.txt'
+                  : view;
+      breadcrumb.innerHTML = `<span style="color:var(--text-dim);">Select a run from the sidebar to view ${label}</span>`;
+      showEmpty();
       return;
     }
+    if (view === 'training') {
+      loadTrainingCurves(runName);
+    } else if (view === 'config') {
+      loadConfig(runName);
+    } else if (view === 'log') {
+      loadLog(runName);
+    }
+  }
+
+  function loadTrainingCurves(runName) {
     breadcrumb.innerHTML = `<span>${fmtRunName(runName)}</span> / <span style="color:var(--accent);">training curves</span>`;
     episodeTabs.innerHTML = '';
     const filePath = `${runName}/training_curves.html`;
-    emptyState.style.display = 'none';
+    showFrame();
     loading.classList.add('show');
-    vizFrame.style.display = 'block';
     // Cache-bust: training_curves.html is rewritten each eval, and browsers
     // will skip refetching an iframe whose src string is byte-identical, so
     // append ?t=now to force a reload even if the URL would otherwise match.
     vizFrame.src = '/api/files/' + encodeURI(filePath) + '?t=' + Date.now();
     vizFrame.onload = () => loading.classList.remove('show');
+  }
+
+  async function loadConfig(runName) {
+    breadcrumb.innerHTML = `<span>${fmtRunName(runName)}</span> / <span style="color:var(--accent);">config.json</span>`;
+    episodeTabs.innerHTML = '';
+    showText();
+    textView.textContent = 'Loading config...';
+    try {
+      const resp = await fetch(`/api/runs/${encodeURIComponent(runName)}/config`);
+      if (!resp.ok) {
+        textView.textContent = `(no config.json available — HTTP ${resp.status})`;
+        return;
+      }
+      const cfg = await resp.json();
+      textView.textContent = JSON.stringify(cfg, null, 2);
+    } catch (e) {
+      textView.textContent = `(failed to load config: ${e})`;
+    }
+  }
+
+  async function loadLog(runName) {
+    breadcrumb.innerHTML = `<span>${fmtRunName(runName)}</span> / <span style="color:var(--accent);">log.txt</span> <span style="color:var(--text-dim);">(last 2000 lines)</span>`;
+    episodeTabs.innerHTML = '';
+    showText();
+    textView.textContent = 'Loading log...';
+    try {
+      const resp = await fetch(`/api/runs/${encodeURIComponent(runName)}/log?tail=2000&t=${Date.now()}`);
+      if (!resp.ok) {
+        textView.textContent = `(no log.txt available — HTTP ${resp.status})`;
+        return;
+      }
+      const txt = await resp.text();
+      textView.textContent = txt;
+      // Auto-scroll to bottom so the most recent output is visible.
+      textView.scrollTop = textView.scrollHeight;
+    } catch (e) {
+      textView.textContent = `(failed to load log: ${e})`;
+    }
   }
 
   function setActiveViewButton(view) {
@@ -301,7 +414,8 @@
   }
 
   function renderEpisodes(episodes, runName, step) {
-    breadcrumb.innerHTML = `<span>${fmtRunName(runName)}</span> / <span>step ${fmtStep(step)}</span>`;
+    const stepLabel = step === 'final' ? 'final rollout' : `step ${fmtStep(step)}`;
+    breadcrumb.innerHTML = `<span>${fmtRunName(runName)}</span> / <span>${stepLabel}</span>`;
     episodeTabs.innerHTML = '';
     for (const ep of episodes) {
       // Skip _traj.html companions — they're alternate views of the matching
@@ -332,16 +446,17 @@
       resolvedFilename = filename.replace(/\.html$/, '_traj.html');
     }
 
+    // step segment: numeric → "step_N", or the special "final" subdir.
+    const stepSegment = step === 'final' ? 'final' : `step_${step}`;
     let filePath;
     if (runName === '__default__') {
-      filePath = `step_${step}/${resolvedFilename}`;
+      filePath = `${stepSegment}/${resolvedFilename}`;
     } else {
-      filePath = `${runName}/step_${step}/${resolvedFilename}`;
+      filePath = `${runName}/${stepSegment}/${resolvedFilename}`;
     }
 
-    emptyState.style.display = 'none';
+    showFrame();
     loading.classList.add('show');
-    vizFrame.style.display = 'block';
     vizFrame.src = '/api/files/' + encodeURI(filePath);
     vizFrame.onload = () => loading.classList.remove('show');
   }
@@ -356,10 +471,10 @@
     es.onmessage = (evt) => {
       // Refresh runs list on any new file event
       fetchRuns();
-      // Training curves are overwritten in place each eval — refresh the
-      // iframe in training-curves view so newly-written panels show up.
-      if (viewMode === 'training' && selectedRun) {
-        loadTrainingCurves(selectedRun);
+      // Run-level views are rewritten in place during training — refresh
+      // the iframe / text view so newly-written content shows up.
+      if (selectedRun && (viewMode === 'training' || viewMode === 'config' || viewMode === 'log')) {
+        loadRunLevelView(viewMode, selectedRun);
       }
     };
     es.onerror = () => {
@@ -376,12 +491,12 @@
       viewToggleEl.querySelectorAll('button').forEach(b =>
         b.classList.toggle('active', b === btn));
 
-      if (viewMode === 'training') {
-        // Training curves are per-run, not per-step. Use the currently
-        // selected run, or the first run in the list, or show a hint.
-        const runForCurves = selectedRun || (runs.length > 0 ? runs[0].name : null);
-        if (runForCurves && !selectedRun) selectedRun = runForCurves;
-        loadTrainingCurves(runForCurves);
+      if (viewMode === 'training' || viewMode === 'config' || viewMode === 'log') {
+        // Run-level views ignore step/episode. Use the currently selected
+        // run, or the first run in the list, or show a hint.
+        const runForView = selectedRun || (runs.length > 0 ? runs[0].name : null);
+        if (runForView && !selectedRun) selectedRun = runForView;
+        loadRunLevelView(viewMode, runForView);
         return;
       }
 
@@ -411,8 +526,36 @@
     }
   });
 
+  // ---- Resizable sidebar ----
+  (function initSidebarResize() {
+    const handle = document.getElementById('sidebarResize');
+    const app = document.querySelector('.app');
+    let dragging = false;
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      dragging = true;
+      handle.classList.add('dragging');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const w = Math.max(160, Math.min(e.clientX, window.innerWidth - 200));
+      document.documentElement.style.setProperty('--sidebar-w', w + 'px');
+    });
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    });
+  })();
+
   // ---- Init ----
-  fetchRuns().then(connectSSE);
+  fetchDashboardConfig()
+    .then(fetchRuns)
+    .then(connectSSE);
 })();
 </script>
 </body>
