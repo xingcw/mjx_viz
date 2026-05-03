@@ -114,7 +114,7 @@
 <body>
 <div class="app">
   <div class="header">
-    <h1>MJX_VIZ CHECKPOINTS</h1>
+    <h1>DRONE RACING — COMPARE RUNS</h1>
     <div class="nav" id="nav"></div>
     <div class="info" id="datasetInfo">Loading dataset...</div>
   </div>
@@ -213,7 +213,7 @@
     const cfg = await fetchJSON("/api/config");
     const nav = [];
     if (cfg.videos_enabled) nav.push(`<a href="/videos">rollouts</a>`);
-    if (cfg.checkpoints_enabled) nav.push(`<a href="/checkpoints" class="active">checkpoints</a>`);
+    if (cfg.checkpoints_enabled) nav.push(`<a href="/checkpoints" class="active">compare runs</a>`);
     els.nav.innerHTML = nav.join("");
   }
 

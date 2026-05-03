@@ -34,6 +34,11 @@
             padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--border);
             gap: 12px; }
   .header h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.5px; }
+  .header .nav { display: flex; gap: 8px; }
+  .header .nav a { color: var(--text-dim); text-decoration: none; font-size: 12px;
+                   padding: 4px 10px; border: 1px solid var(--border); border-radius: 4px; }
+  .header .nav a.active { color: var(--accent); border-color: var(--accent-dim); }
+  .header .nav a:hover { color: var(--text); }
   .header button { background: var(--bg); border: 1px solid var(--border);
                    color: var(--text-dim); font-size: 11px; padding: 4px 10px;
                    border-radius: 4px; cursor: pointer; font-family: inherit; }
@@ -185,7 +190,8 @@
 <body>
 <div class="app" id="app">
   <div class="header">
-    <h1>GO2 TRAINING DASHBOARD</h1>
+    <h1>DRONE RACING TRAINING DASHBOARD</h1>
+    <div class="nav" id="nav"></div>
     <button id="fullscreenBtn" title="Hide sidebar/toolbar (or press F)">Fullscreen</button>
     <div class="status">
       <div class="status-dot" id="statusDot"></div>
@@ -305,6 +311,13 @@
       // Per-run config.json + log.txt only exist in unified mode.
       viewConfigBtn.hidden = !unified;
       viewLogBtn.hidden = !unified;
+      // Top-level nav: keep the per-run "rollouts" view active and offer a
+      // jump to the cross-run "compare runs" overlay (eval reward curves
+      // overlaid across every run). Mirrors checkpoints.html.
+      const navEl = document.getElementById('nav');
+      const links = [`<a href="/videos" class="active">rollouts</a>`];
+      if (cfg.checkpoints_enabled) links.push(`<a href="/checkpoints">compare runs</a>`);
+      navEl.innerHTML = links.join("");
     } catch (_) { /* noop */ }
   }
 
