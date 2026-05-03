@@ -53,29 +53,79 @@
 
   /* Sidebar */
   .sidebar { background: var(--surface); border-right: 1px solid var(--border);
-             overflow-y: auto; padding: 8px 0; position: relative; }
+             overflow-y: auto; overflow-x: hidden; padding: 8px 0; position: relative; }
   .sidebar::-webkit-scrollbar { width: 4px; }
   .sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-  .sidebar-resize { position: absolute; top: 0; right: -3px; width: 6px; height: 100%;
-                    cursor: col-resize; z-index: 20; }
-  .sidebar-resize:hover, .sidebar-resize.dragging { background: var(--accent); opacity: 0.5; }
+  /* Always-visible resize handle so users can drag it to widen the sidebar
+     and read long run/exp names. 8px wide hit area; the inner 2px line and
+     three grip dots make it clearly draggable. Brighter on hover/drag. */
+  .sidebar-resize { position: absolute; top: 0; right: 0; width: 8px; height: 100%;
+                    cursor: col-resize; z-index: 20; background: transparent;
+                    border-right: 2px solid var(--border);
+                    transition: border-color 0.15s; }
+  .sidebar-resize::before {
+    content: ''; position: absolute; right: 1px; top: 50%;
+    width: 4px; height: 28px; margin-top: -14px;
+    background-image: radial-gradient(circle, var(--text-dim) 1px, transparent 1.5px);
+    background-size: 4px 6px; background-repeat: repeat-y;
+    pointer-events: none;
+  }
+  .sidebar-resize:hover, .sidebar-resize.dragging { border-right-color: var(--accent); }
+  .sidebar-resize.dragging::before { background-image: radial-gradient(circle, var(--accent) 1px, transparent 1.5px); }
+  /* Full-viewport overlay activated only while dragging the sidebar. Without
+     this, the iframe (3D viewer / training curves) eats the mousemove events
+     the instant the cursor crosses it and the resize stalls. */
+  .drag-overlay { position: fixed; inset: 0; z-index: 100;
+                  cursor: col-resize; display: none; }
+  .drag-overlay.active { display: block; }
+
+  /* Sticky sidebar header: holds the Expand/Collapse toggle button. Sticks
+     at the top so the button is always reachable while scrolling runs. */
+  .sidebar-header { position: sticky; top: 0; z-index: 5;
+                    display: flex; justify-content: flex-end; align-items: center;
+                    gap: 6px; padding: 6px 14px 6px 12px;
+                    background: var(--surface);
+                    border-bottom: 1px solid var(--border); }
+  .sidebar-toggle { background: var(--bg); border: 1px solid var(--border);
+                    color: var(--text-dim); font-size: 11px;
+                    padding: 4px 10px; cursor: pointer;
+                    border-radius: 4px; font-family: monospace;
+                    display: inline-flex; align-items: center; gap: 6px;
+                    transition: all 0.15s; }
+  .sidebar-toggle:hover { color: var(--text); border-color: var(--accent-dim); }
+  .sidebar-toggle.active { background: var(--accent-dim);
+                           border-color: var(--accent); color: #fff; }
+  .sidebar-toggle .icon { font-size: 14px; line-height: 1;
+                          transition: transform 0.2s; }
+  .sidebar-toggle.active .icon { transform: rotate(180deg); }
+
   .run-group { margin-bottom: 4px; }
+  /* min-width: 0 lets flex children shrink; the .run-name child then truncates
+     with ellipsis instead of forcing a horizontal page scrollbar. */
   .run-header { display: flex; align-items: center; padding: 8px 12px; cursor: pointer;
                 font-size: 13px; font-weight: 600; color: var(--text-dim);
-                transition: background 0.15s; user-select: none; gap: 6px; }
+                transition: background 0.15s; user-select: none; gap: 6px;
+                min-width: 0; }
   .run-header:hover { background: var(--surface-hover); color: var(--text); }
   .run-header.active { color: var(--accent); }
-  .run-header .arrow { font-size: 10px; transition: transform 0.2s; width: 12px; }
+  .run-header .arrow { font-size: 10px; transition: transform 0.2s; width: 12px;
+                       flex: 0 0 auto; }
   .run-header .arrow.open { transform: rotate(90deg); }
+  .run-header .run-name { flex: 1 1 auto; min-width: 0;
+                          overflow: hidden; text-overflow: ellipsis;
+                          white-space: nowrap; }
   .run-header .count { margin-left: auto; font-size: 11px; font-weight: 400;
-                       background: var(--border); padding: 1px 6px; border-radius: 8px; }
+                       background: var(--border); padding: 1px 6px; border-radius: 8px;
+                       flex: 0 0 auto; }
   .run-header .badge-new { margin-left: 4px; font-size: 10px; font-weight: 700;
-                           color: var(--badge); animation: pulse 1s ease-in-out infinite; }
+                           color: var(--badge); animation: pulse 1s ease-in-out infinite;
+                           flex: 0 0 auto; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
   .step-list { display: none; }
   .step-list.open { display: block; }
   .step-item { padding: 6px 12px 6px 30px; font-size: 12px; cursor: pointer;
-               color: var(--text-dim); transition: all 0.15s; }
+               color: var(--text-dim); transition: all 0.15s;
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .step-item:hover { background: var(--surface-hover); color: var(--text); }
   .step-item.active { color: var(--accent); background: rgba(108, 140, 255, 0.08); }
   .step-item .step-label { font-family: monospace; }
@@ -111,7 +161,11 @@
   /* "final" rollout marker: post-training run, surfaced in the step list. */
   .step-item.final-step .step-label::before { content: "★ "; color: var(--green); }
 
-  .viewer { flex: 1; position: relative; background: var(--bg); }
+  /* min-height: 0 is critical for flex children that hold scrollable content:
+     without it, a long <pre> (Config/Log views) makes .viewer expand to its
+     content size, which then gets clipped at the bottom of the page instead
+     of triggering the inner scrollbar. */
+  .viewer { flex: 1; min-height: 0; position: relative; background: var(--bg); }
   .viewer iframe { width: 100%; height: 100%; border: none; }
   .viewer pre.text-view { width: 100%; height: 100%; margin: 0; padding: 16px;
                            background: var(--bg); color: var(--text);
@@ -141,9 +195,18 @@
   <button class="exit-fs" id="exitFsBtn" title="Press F or Esc to exit">Exit fullscreen</button>
 
   <div class="sidebar" id="sidebar">
-    <div style="padding: 12px; color: var(--text-dim); font-size: 12px;">Loading runs...</div>
-    <div class="sidebar-resize" id="sidebarResize"></div>
+    <div class="sidebar-header">
+      <button class="sidebar-toggle" id="sidebarToggle"
+              title="Click to widen the sidebar so you can read full run names. Click again to collapse and reclaim screen space for the video.">
+        <span class="icon">»</span><span class="label">Expand</span>
+      </button>
+    </div>
+    <div class="sidebar-body" id="sidebarBody">
+      <div style="padding: 12px; color: var(--text-dim); font-size: 12px;">Loading runs...</div>
+    </div>
+    <div class="sidebar-resize" id="sidebarResize" title="Drag to resize, or double-click to fit the longest name"></div>
   </div>
+  <div class="drag-overlay" id="dragOverlay"></div>
 
   <div class="main">
     <div class="toolbar" id="toolbar">
@@ -197,6 +260,40 @@
   const statusText = document.getElementById('statusText');
   const viewConfigBtn = document.getElementById('viewConfigBtn');
   const viewLogBtn = document.getElementById('viewLogBtn');
+  const sidebarBody = document.getElementById('sidebarBody');
+  const sidebarToggleBtn = document.getElementById('sidebarToggle');
+
+  // ---- Sidebar Expand/Collapse toggle ----
+  // Two-state: collapsed (DEFAULT_SIDEBAR_W, the CSS default) ↔ expanded
+  // (fit-to-longest-name, capped at ~55% viewport). Click to switch. The
+  // user's manual drag of the resizer doesn't change the toggle state but
+  // does update the actual width — clicking the toggle then snaps to the
+  // canonical narrow/wide values. Workflow: click Expand to find a run by
+  // its full name, click Collapse to give the screen back to the video.
+  const DEFAULT_SIDEBAR_W = 280;
+  let sidebarExpanded = false;
+
+  function setSidebarWidth(px) {
+    document.documentElement.style.setProperty('--sidebar-w', px + 'px');
+  }
+  function updateSidebarToggleUI() {
+    const labelEl = sidebarToggleBtn.querySelector('.label');
+    sidebarToggleBtn.classList.toggle('active', sidebarExpanded);
+    if (sidebarExpanded) {
+      labelEl.textContent = 'Collapse';
+      sidebarToggleBtn.title = 'Collapse the sidebar to give the video viewer back its space.';
+    } else {
+      labelEl.textContent = 'Expand';
+      sidebarToggleBtn.title = 'Widen the sidebar to read full run names. Click again to collapse.';
+    }
+  }
+  sidebarToggleBtn.addEventListener('click', () => {
+    sidebarExpanded = !sidebarExpanded;
+    if (sidebarExpanded) fitSidebarToContent();
+    else setSidebarWidth(DEFAULT_SIDEBAR_W);
+    updateSidebarToggleUI();
+  });
+  updateSidebarToggleUI();
 
   // ---- API helpers ----
   async function fetchDashboardConfig() {
@@ -215,6 +312,26 @@
     const resp = await fetch('/api/runs');
     runs = await resp.json();
     renderSidebar();
+  }
+
+  function fitSidebarToContent() {
+    const sidebar = document.getElementById('sidebar');
+    const names = sidebar.querySelectorAll('.run-name');
+    if (!names.length) return;
+    let widest = 0;
+    for (const el of names) {
+      // scrollWidth = full text width even when currently truncated by ellipsis.
+      widest = Math.max(widest, el.scrollWidth);
+    }
+    // Reserve space for the chrome around the name: 24px horizontal padding
+    // + 12px arrow + 6px gap + ~60px count badge + 8px breathing room ≈ 110px.
+    const w = widest + 110;
+    // Clamp: not narrower than the CSS default, not wider than ~half the
+    // viewport so the main viewer still has room for the 3D / config view.
+    const minW = 200;
+    const maxW = Math.floor(window.innerWidth * 0.55);
+    const clamped = Math.max(minW, Math.min(w, maxW));
+    document.documentElement.style.setProperty('--sidebar-w', clamped + 'px');
   }
 
   async function fetchEpisodes(runName, step) {
@@ -262,7 +379,7 @@
   // ---- Render sidebar ----
   function renderSidebar() {
     if (runs.length === 0) {
-      sidebar.innerHTML = '<div style="padding:12px;color:var(--text-dim);font-size:12px;">No runs found</div>';
+      sidebarBody.innerHTML = '<div style="padding:12px;color:var(--text-dim);font-size:12px;">No runs found</div>';
       return;
     }
     let html = '';
@@ -272,7 +389,7 @@
       html += `<div class="run-group">`;
       html += `<div class="run-header ${isActive ? 'active' : ''}" data-run="${run.name}">`;
       html += `<span class="arrow ${isOpen ? 'open' : ''}">&#9654;</span>`;
-      html += `<span title="${run.name}">${fmtRunName(run.name)}</span>`;
+      html += `<span class="run-name" title="${run.name}">${fmtRunName(run.name)}</span>`;
       html += `<span class="count">${run.num_steps} steps</span>`;
       html += `</div>`;
       html += `<div class="step-list ${isOpen ? 'open' : ''}">`;
@@ -287,7 +404,7 @@
       }
       html += `</div></div>`;
     }
-    sidebar.innerHTML = html;
+    sidebarBody.innerHTML = html;
 
     // Bind events
     sidebar.querySelectorAll('.run-header').forEach(el => {
@@ -529,27 +646,48 @@
   // ---- Resizable sidebar ----
   (function initSidebarResize() {
     const handle = document.getElementById('sidebarResize');
-    const app = document.querySelector('.app');
+    const overlay = document.getElementById('dragOverlay');
     let dragging = false;
+
+    function clamp(x) {
+      // Generous max — let the user drag almost the full viewport so the
+      // longest exp_names fit without word-wrap.
+      return Math.max(160, Math.min(x, window.innerWidth - 120));
+    }
+
+    function onMove(e) {
+      if (!dragging) return;
+      document.documentElement.style.setProperty(
+        '--sidebar-w', clamp(e.clientX) + 'px');
+    }
+    function onUp() {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      overlay.classList.remove('active');
+      document.body.style.userSelect = '';
+    }
+
     handle.addEventListener('mousedown', (e) => {
       e.preventDefault();
       dragging = true;
       handle.classList.add('dragging');
-      document.body.style.cursor = 'col-resize';
+      // The overlay sits above the iframe at z-index 100; without it the
+      // 3D viewer / Plotly iframe captures mousemove the moment the cursor
+      // crosses into .main and the resize stalls midway.
+      overlay.classList.add('active');
       document.body.style.userSelect = 'none';
     });
-    document.addEventListener('mousemove', (e) => {
-      if (!dragging) return;
-      const w = Math.max(160, Math.min(e.clientX, window.innerWidth - 200));
-      document.documentElement.style.setProperty('--sidebar-w', w + 'px');
-    });
-    document.addEventListener('mouseup', () => {
-      if (!dragging) return;
-      dragging = false;
-      handle.classList.remove('dragging');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    });
+    // Listen on both window and overlay so neither the iframe nor a stray
+    // capture phase listener can swallow these events.
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    overlay.addEventListener('mousemove', onMove);
+    overlay.addEventListener('mouseup', onUp);
+
+    // Convenience: double-click the handle to widen the sidebar to fit the
+    // longest run name. Capped at 55% of the viewport.
+    handle.addEventListener('dblclick', () => fitSidebarToContent());
   })();
 
   // ---- Init ----
