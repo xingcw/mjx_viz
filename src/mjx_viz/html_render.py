@@ -16,6 +16,7 @@ def render_brax_html(
     time_scale: float = 1.0,
     frame_dt: Optional[float] = None,
     show_overlay: bool = True,
+    episode_reward: Optional[float] = None,
 ) -> Optional[str]:
     """Return a standalone HTML string showing the trajectory in brax's WebGL viewer.
 
@@ -46,6 +47,11 @@ def render_brax_html(
             shows `step N | t = X.XXX s` updated per animation frame. The
             step count is computed from the animator's clock and the
             (subsample-adjusted) per-frame dt, so it tracks scrubbing too.
+        episode_reward: optional cumulative env reward for this rollout. When
+            provided, the HUD shows a static summary line above the dynamic
+            step/time counter: `ep <T>  return <R>` where T is the recorded
+            trajectory length and R is the cumulative reward. Pass None to
+            keep the legacy single-line HUD.
 
     Returns:
         HTML string, or None if the trajectory is empty or rendering fails.
@@ -122,22 +128,39 @@ def render_brax_html(
     )
 
     if show_overlay:
-        # Top-left HUD: step counter + physical time (seconds). Updates each
-        # animation frame by hooking into Animator.update. step is derived
-        # from action.time / per-step wall-clock dt; ranges 0..ep_len-1.
+        # Top-left HUD: optional static summary line (ep length + cumulative
+        # reward when provided) above a dynamic step + time counter. The
+        # dynamic line updates each animation frame by hooking into
+        # Animator.update; the static line is baked once at render time.
         ep_len_recorded = total
         per_step_dt = float(effective_frame_dt)
+        if episode_reward is not None:
+            summary_line_js = (
+                f"'ep {ep_len_recorded}  return {float(episode_reward):.2f}'"
+            )
+            has_summary_js = "true"
+        else:
+            summary_line_js = "''"
+            has_summary_js = "false"
         inject_lines.append(f"""
       (function () {{
-        var stepDt   = {per_step_dt};
-        var totalFr  = {ep_len_recorded};
+        var stepDt      = {per_step_dt};
+        var totalFr     = {ep_len_recorded};
+        var summaryLine = {summary_line_js};
+        var hasSummary  = {has_summary_js};
         var hud      = document.createElement('div');
         hud.style.cssText = 'position:absolute;top:8px;left:8px;z-index:9999;'
           + 'font-family:Menlo, Monaco, Consolas, "Courier New", monospace;'
           + 'font-size:13px;font-weight:600;color:#fff;'
           + 'background:rgba(0,0,0,0.55);padding:4px 8px;border-radius:4px;'
-          + 'pointer-events:none;letter-spacing:0.02em;';
-        hud.textContent = 'step 0 / ' + (totalFr - 1) + '   t = 0.000 s';
+          + 'pointer-events:none;letter-spacing:0.02em;'
+          + 'white-space:pre;line-height:1.35;';
+        function frameText(stepIdx, tSec) {{
+          var dyn = 'step ' + stepIdx + ' / ' + (totalFr - 1)
+                  + '   t = ' + tSec.toFixed(3) + ' s';
+          return hasSummary ? (summaryLine + '\\n' + dyn) : dyn;
+        }}
+        hud.textContent = frameText(0, 0);
         var parent = domElement;
         if (getComputedStyle(parent).position === 'static') {{
           parent.style.position = 'relative';
@@ -150,8 +173,7 @@ def render_brax_html(
           origUpdate();
           var t  = this.action ? this.action.time : 0;
           var st = Math.min(totalFr - 1, Math.max(0, Math.round(t / stepDt)));
-          hud.textContent = 'step ' + st + ' / ' + (totalFr - 1)
-                          + '   t = ' + t.toFixed(3) + ' s';
+          hud.textContent = frameText(st, t);
         }};
       }})();""")
 
