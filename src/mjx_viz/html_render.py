@@ -25,10 +25,9 @@ def render_brax_html(
         xpos: (T, num_links, 3) link positions in world frame. The world body
             (index 0) must already be excluded.
         xquat: (T, num_links, 4) link quaternions (wxyz), world body excluded.
-        height: viewer height. Pass an int (treated as pixels by brax's colab
-            template) or a CSS length string like "100vh"/"100%". Default
-            "100vh" makes the viewer fill its iframe; brax's non-colab template
-            requires a CSS unit (a unitless int produces invalid CSS).
+        height: viewer height. Pass an int (normalized here to `"Npx"`) or a
+            CSS length string like "100vh"/"100%". Default "100vh" makes the
+            viewer fill its iframe.
         max_frames: subsample trajectory to at most this many frames so the
             generated HTML stays reasonably small.
         time_scale: initial value of the viewer's Trajectory > timeScale slider.
@@ -111,7 +110,8 @@ def render_brax_html(
 
     states = [_VizState(pos=xpos[i], rot=xquat[i]) for i in range(0, total, step)]
 
-    html = brax_html_render(sys, states, height=height, colab=False)
+    render_height = f"{height}px" if isinstance(height, int) else height
+    html = brax_html_render(sys, states, height=render_height, colab=False)
 
     target = "var viewer = new Viewer(domElement, system);"
     inject_lines = [target]
