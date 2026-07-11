@@ -1,6 +1,6 @@
 """Filesystem scanner for SAC/PPO checkpoint datasets.
 
-Supports three on-disk layouts:
+Supports four on-disk layouts:
 
 1. Morphology-randomized runs (data_gen/collect.py + eval_morphology_distributed.py):
        {root}/eval_config.yaml
@@ -18,8 +18,14 @@ Supports three on-disk layouts:
        {root}/ckpt_NNNNNNNNNNNN/{eval_metrics.pkl, sac_metrics.pkl,
                                  sac_params.pkl, DONE.txt}
 
-The scanner keys runs by their directory basename (run_name) so both
-`run_XXXXX` and `ckpt_NNNNNNNNNNNN` are first-class.
+4. LMDB checkpoint datasets (process/prepare_ckpts.py output; one LMDB
+   per training run, run dirs named by bare run index):
+       {root}/NNNNNN/{data.mdb, lock.mdb, runs.json}
+   The reward curve is read from runs.json (per-checkpoint `train_ret`),
+   so no LMDB open is needed to plot training progress.
+
+The scanner keys runs by their directory basename (run_name) so
+`run_XXXXX`, `ckpt_NNNNNNNNNNNN`, and bare `NNNNNN` are first-class.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from __future__ import annotations
 import json
 import pickle
 import re
+from concurrent.futures import ProcessPoolExecutor
 from functools import lru_cache
 from pathlib import Path
 
@@ -35,6 +42,7 @@ import yaml
 
 
 RUN_DIR_RE = re.compile(r"^(?:run|ckpt)_(\d+)(?:_[A-Za-z0-9._-]+)?$")
+LMDB_RUN_DIR_RE = re.compile(r"^(\d+)$")
 
 # Names to probe, in priority order. The first that exists wins.
 _EVAL_PKL_NAMES = ("morphology_eval_metrics.pkl", "eval_metrics.pkl")
@@ -46,6 +54,14 @@ def _parse_run_suffix(name: str) -> int | None:
     """Return the numeric suffix of a `run_*` or `ckpt_*` dir, else None."""
     m = RUN_DIR_RE.match(name)
     return int(m.group(1)) if m else None
+
+
+def _lmdb_runs_json(run_dir: Path) -> Path | None:
+    """Return `<run>/runs.json` if this dir is an LMDB dataset run, else None."""
+    if LMDB_RUN_DIR_RE.match(run_dir.name) is None:
+        return None
+    candidate = run_dir / "runs.json"
+    return candidate if candidate.is_file() else None
 
 
 def _read_json(path: Path) -> dict | None:
@@ -122,6 +138,24 @@ def scan_ckpt_runs(root: str | Path, *, unified: bool = False) -> list[dict]:
     for entry in sorted(root_p.iterdir()):
         if not entry.is_dir():
             continue
+        runs_json = _lmdb_runs_json(entry)
+        if runs_json is not None:
+            # Layout 4: LMDB dataset run. The curve source is runs.json and
+            # the run is by construction complete (runs.json is written when
+            # dataset preparation finishes).
+            runs.append(
+                {
+                    "name": entry.name,
+                    "path": str(entry),
+                    "ckpt_path": str(entry),
+                    "run_suffix": int(entry.name),
+                    "morphology_metadata": None,
+                    "train_done": True,
+                    "eval_curve_path": str(runs_json),
+                    "eval_done_marker": False,
+                }
+            )
+            continue
         suffix = _parse_run_suffix(entry.name)
         if suffix is None:
             continue
@@ -161,15 +195,59 @@ def _load_curve_cached(path_str: str, mtime: float) -> tuple[tuple[float, ...], 
     return tuple(float(x) for x in arr.tolist()), final
 
 
+def _extract_lmdb_train_ret(path_str: str) -> list[float]:
+    """Read the per-checkpoint train_ret curve out of an LMDB run's runs.json.
+
+    Handles both a plain per-run json ({"metadata": ..., "checkpoints": ...})
+    and the fused variant that nests it under the run id.
+    """
+    with open(path_str, "r") as f:
+        data = json.load(f)
+    run_name = Path(path_str).parent.name
+    if run_name in data:
+        data = data[run_name]
+    metadata = data["metadata"]
+    if "train_ret" in metadata:
+        rewards = metadata["train_ret"]
+    else:
+        rewards = [ckpt["train_ret"] for ckpt in data["checkpoints"].values()]
+    return [float(r) for r in rewards]
+
+
+@lru_cache(maxsize=8192)
+def _load_lmdb_curve_cached(path_str: str, mtime: float) -> tuple[tuple[float, ...], float | None]:
+    """Cached runs.json curve load keyed on (path, mtime)."""
+    rewards = _extract_lmdb_train_ret(path_str)
+    final = float(rewards[-1]) if rewards else None
+    return tuple(rewards), final
+
+
+def _lmdb_final_reward(path_str: str) -> float | None:
+    """ProcessPool worker: final train_ret of one LMDB run's runs.json."""
+    rewards = _extract_lmdb_train_ret(path_str)
+    return float(rewards[-1]) if rewards else None
+
+
 def load_reward_curve(run_path: str | Path, *, unified: bool = False) -> dict | None:
     """Return {"rewards": [...], "final_reward": float, "num_ckpts": int,
-    "source": "<eval_pkl_basename>"} for the given run directory, or None
-    if no eval pkl exists.
+    "source": "<curve_file_basename>"} for the given run directory, or None
+    if no curve source exists.
 
     `run_path` is the run directory. In unified mode the eval pkl lives
-    one level deeper at `<run>/checkpoints/`.
+    one level deeper at `<run>/checkpoints/`. LMDB dataset runs carry their
+    curve in `<run>/runs.json` instead of an eval pkl.
     """
     run_p = Path(run_path)
+    runs_json = _lmdb_runs_json(run_p)
+    if runs_json is not None:
+        mtime = runs_json.stat().st_mtime
+        rewards_tuple, final = _load_lmdb_curve_cached(str(runs_json), mtime)
+        return {
+            "rewards": list(rewards_tuple),
+            "final_reward": final,
+            "num_ckpts": len(rewards_tuple),
+            "source": runs_json.name,
+        }
     search_dir = _ckpt_search_dir(run_p, unified)
     eval_pkl = _first_existing(search_dir, _EVAL_PKL_NAMES)
     if eval_pkl is None:
@@ -184,13 +262,37 @@ def load_reward_curve(run_path: str | Path, *, unified: bool = False) -> dict | 
     }
 
 
-def load_final_rewards(root: str | Path, *, unified: bool = False) -> dict[str, float]:
-    """Return {run_name: final_reward} for every run with an eval pkl."""
+@lru_cache(maxsize=16)
+def _lmdb_final_rewards_cached(paths: tuple[tuple[str, str], ...]) -> dict[str, float]:
+    """Batched final-reward extraction for LMDB runs.
+
+    `paths` is a tuple of (run_name, runs_json_path). Fans out over a
+    process pool because parsing thousands of runs.json files is CPU-bound
+    (the metadata blocks are large); cached on the exact run set so the
+    dataset is only swept once per server process.
+    """
     out: dict[str, float] = {}
+    with ProcessPoolExecutor(max_workers=16) as pool:
+        finals = pool.map(_lmdb_final_reward, [p for _, p in paths], chunksize=32)
+        for (name, _), final in zip(paths, finals):
+            if final is not None:
+                out[name] = final
+    return out
+
+
+def load_final_rewards(root: str | Path, *, unified: bool = False) -> dict[str, float]:
+    """Return {run_name: final_reward} for every run with a curve source."""
+    out: dict[str, float] = {}
+    lmdb_runs: list[tuple[str, str]] = []
     for info in scan_ckpt_runs(root, unified=unified):
         if info["eval_curve_path"] is None:
+            continue
+        if info["eval_curve_path"].endswith("runs.json"):
+            lmdb_runs.append((info["name"], info["eval_curve_path"]))
             continue
         curve = load_reward_curve(info["path"], unified=unified)
         if curve is not None and curve["final_reward"] is not None:
             out[info["name"]] = curve["final_reward"]
+    if lmdb_runs:
+        out.update(_lmdb_final_rewards_cached(tuple(lmdb_runs)))
     return out

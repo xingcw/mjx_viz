@@ -21,8 +21,9 @@ from pathlib import Path
 
 # Path-traversal guard for /api/ckpts/runs/{run_name}/... and /api/runs/.../config etc.
 # Allows the optional `_<suffix>` postfix that DashboardSink writes when an
-# `--exp-name` is set (e.g. run_00007_lr3e4_seed0).
-_RUN_NAME_RE = re.compile(r"^(?:run|ckpt)_\d+(?:_[A-Za-z0-9._-]+)?$")
+# `--exp-name` is set (e.g. run_00007_lr3e4_seed0). Bare numeric names are
+# LMDB dataset runs (layout 4 in dashboard/checkpoints.py).
+_RUN_NAME_RE = re.compile(r"^(?:(?:run|ckpt)_)?\d+(?:_[A-Za-z0-9._-]+)?$")
 
 
 def _parse_run_name_from_url(name: str) -> str | None:
