@@ -37,6 +37,7 @@ from mjx_viz.dashboard.checkpoints import (
     load_dataset_config,
     load_final_rewards,
     load_reward_curve,
+    load_run_metadata,
     scan_ckpt_runs,
 )
 from mjx_viz.dashboard.watcher import scan_runs, watch_sse
@@ -179,13 +180,7 @@ def create_app(
                     f"No eval pkl (morphology_eval_metrics.pkl or "
                     f"eval_metrics.pkl) found in {run_name}",
                 )
-            meta_dir = run_dir / "checkpoints" if unified else run_dir
-            meta_path = meta_dir / "morphology_metadata.json"
-            meta = {}
-            if meta_path.is_file():
-                import json as _json
-
-                meta = _json.loads(meta_path.read_text())
+            meta = load_run_metadata(run_dir, unified=unified)
             return {
                 "name": run_name,
                 "rewards": curve["rewards"],

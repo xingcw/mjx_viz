@@ -123,6 +123,10 @@
     <div class="controls">
       <input type="text" id="search" placeholder="Filter runs..." />
       <div class="row">
+        <input type="number" id="rangeFrom" placeholder="run # from" />
+        <input type="number" id="rangeTo" placeholder="run # to" />
+      </div>
+      <div class="row">
         <select id="sortBy">
           <option value="run_suffix">Sort: name / suffix</option>
           <option value="final_reward_desc">Sort: final reward (high -> low)</option>
@@ -180,6 +184,8 @@
     selected: new Map(),   // name -> {rewards, final_reward, num_ckpts, morphology_metadata, source}
     sortBy: "run_suffix",
     search: "",
+    rangeFrom: null,       // inclusive run_suffix lower bound, or null
+    rangeTo: null,         // inclusive run_suffix upper bound, or null
     evalOnly: true,
     xMode: "index",        // index | fraction | step
     numTimesteps: null,
@@ -187,6 +193,8 @@
 
   const els = {
     search: document.getElementById("search"),
+    rangeFrom: document.getElementById("rangeFrom"),
+    rangeTo: document.getElementById("rangeTo"),
     sortBy: document.getElementById("sortBy"),
     evalOnly: document.getElementById("evalOnly"),
     runList: document.getElementById("runList"),
@@ -262,6 +270,12 @@
         }
         return false;
       });
+    }
+    if (state.rangeFrom != null) {
+      out = out.filter((r) => r.run_suffix >= state.rangeFrom);
+    }
+    if (state.rangeTo != null) {
+      out = out.filter((r) => r.run_suffix <= state.rangeTo);
     }
     const sortBy = state.sortBy;
     out = [...out];
@@ -468,6 +482,16 @@
 
   els.search.addEventListener("input", (e) => {
     state.search = e.target.value;
+    applyFilter();
+  });
+  els.rangeFrom.addEventListener("input", (e) => {
+    const v = e.target.value.trim();
+    state.rangeFrom = v === "" ? null : Number(v);
+    applyFilter();
+  });
+  els.rangeTo.addEventListener("input", (e) => {
+    const v = e.target.value.trim();
+    state.rangeTo = v === "" ? null : Number(v);
     applyFilter();
   });
   els.sortBy.addEventListener("change", (e) => {

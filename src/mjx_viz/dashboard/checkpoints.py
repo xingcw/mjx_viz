@@ -1,6 +1,6 @@
 """Filesystem scanner for SAC/PPO checkpoint datasets.
 
-Supports four on-disk layouts:
+Supports five on-disk layouts:
 
 1. Morphology-randomized runs (data_gen/collect.py + eval_morphology_distributed.py):
        {root}/eval_config.yaml
@@ -23,6 +23,18 @@ Supports four on-disk layouts:
        {root}/NNNNNN/{data.mdb, lock.mdb, runs.json}
    The reward curve is read from runs.json (per-checkpoint `train_ret`),
    so no LMDB open is needed to plot training progress.
+
+5. Non-morphology runs, unified layout (data_gen/collect.py current schema,
+   e.g. racing_pointmass_ppo_elu_v1; data_gen/train_racing_ppo.py writes the
+   per-run config.json):
+       {root}/config.yaml, eval_config.yaml
+       {root}/run_XXXXX/{run_metadata.json, finished.json, config.json,
+                         checkpoints/{eval_metrics.pkl, ppo_params.pkl,
+                                      ppo_metrics.pkl, ckpt_steps.json,
+                                      DONE.txt}}
+   Same shape as layout 1 with `run_metadata.json` in place of
+   `morphology_metadata.json` (no morphology fields, but the same
+   `train_seed` / `domain_rand` keys) -- see `_METADATA_NAMES`.
 
 The scanner keys runs by their directory basename (run_name) so
 `run_XXXXX`, `ckpt_NNNNNNNNNNNN`, and bare `NNNNNN` are first-class.
@@ -48,6 +60,11 @@ LMDB_RUN_DIR_RE = re.compile(r"^(\d+)$")
 _EVAL_PKL_NAMES = ("morphology_eval_metrics.pkl", "eval_metrics.pkl")
 _TRAIN_DONE_NAMES = ("finished.json", "DONE.txt")
 _EVAL_DONE_NAMES = ("MORPHOLOGY_EVAL_DONE.txt",)
+# morphology_metadata.json is the older Ant-morphology name; run_metadata.json
+# is what data_gen/collect.py currently writes for morphology-free datasets
+# (e.g. racing). Both carry train_seed / domain_rand; only the former also
+# carries morphology_scales / morphology_seed.
+_METADATA_NAMES = ("morphology_metadata.json", "run_metadata.json")
 
 
 def _parse_run_suffix(name: str) -> int | None:
@@ -89,6 +106,26 @@ def _first_existing(directory: Path, names: tuple[str, ...]) -> Path | None:
         if p.is_file():
             return p
     return None
+
+
+def load_run_metadata(run_dir: str | Path, *, unified: bool = False) -> dict:
+    """Return the parsed per-run metadata dict for one run directory.
+
+    Probes `_METADATA_NAMES` in priority order. In unified mode, run-level
+    metadata (`run_metadata.json`, written by data_gen/collect.py alongside
+    `finished.json` / `config.json`) sits at `<run>/`; the older Ant-morphology
+    `morphology_metadata.json` sits inside `<run>/checkpoints/`. Both dirs are
+    probed, run-level first, so either dataset shape resolves. Returns an
+    empty dict if no metadata file exists.
+    """
+    run_dir = Path(run_dir)
+    ckpt_dir = _ckpt_search_dir(run_dir, unified)
+    search_dirs = (run_dir, ckpt_dir) if unified else (ckpt_dir,)
+    for d in search_dirs:
+        metadata_path = _first_existing(d, _METADATA_NAMES)
+        if metadata_path is not None:
+            return _read_json(metadata_path) or {}
+    return {}
 
 
 def load_dataset_config(root: str | Path) -> dict | None:
@@ -167,13 +204,14 @@ def scan_ckpt_runs(root: str | Path, *, unified: bool = False) -> list[dict]:
         train_done_dir = entry if unified else ckpt_dir
         train_done = _first_existing(train_done_dir, _TRAIN_DONE_NAMES) is not None
         eval_done_marker = _first_existing(ckpt_dir, _EVAL_DONE_NAMES) is not None
+        metadata = load_run_metadata(entry, unified=unified)
         runs.append(
             {
                 "name": entry.name,
                 "path": str(entry),
                 "ckpt_path": str(ckpt_dir),
                 "run_suffix": suffix,
-                "morphology_metadata": _read_json(ckpt_dir / "morphology_metadata.json"),
+                "morphology_metadata": metadata or None,
                 "train_done": train_done,
                 "eval_curve_path": str(eval_pkl) if eval_pkl is not None else None,
                 "eval_done_marker": eval_done_marker,
